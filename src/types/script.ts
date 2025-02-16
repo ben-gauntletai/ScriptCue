@@ -1,3 +1,5 @@
+import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+
 export interface DialogueLine {
   id: string;
   text: string;
@@ -10,11 +12,12 @@ export interface DialogueLine {
 export interface ScriptSession {
   id: string;
   scriptId: string;
+  userId: string;
   currentLine: number;
   userCharacter: string;
   status: 'active' | 'paused' | 'completed';
-  startTime: number;
-  lastActiveTime: number;
+  startTime: FirebaseFirestoreTypes.Timestamp;
+  lastActiveTime: FirebaseFirestoreTypes.Timestamp;
 }
 
 export interface ScriptCharacter {
@@ -24,23 +27,31 @@ export interface ScriptCharacter {
   gender: 'male' | 'female' | 'unknown';
 }
 
-export interface ScriptMetadata {
+export interface ScriptScene {
   id: string;
-  title: string;
-  characters: Record<string, ScriptCharacter>;
-  totalLines: number;
-  scenes: {
-    id: string;
-    name: string;
-    startLine: number;
-    endLine: number;
-  }[];
+  name: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface ScriptSetting {
+  id: string;
+  key: string;
+  value: any;
 }
 
 export interface VoiceSettings {
   voiceId: string;
   pitch: number;
   speed: number;
+}
+
+export interface ScriptMetadata {
+  id: string;
+  title: string;
+  characters: Record<string, ScriptCharacter>;
+  totalLines: number;
+  scenes: ScriptScene[];
 }
 
 export interface ScriptContextType {
@@ -57,4 +68,19 @@ export interface ScriptContextType {
     completeCurrentLine: () => Promise<void>;
     updateVoiceSettings: (characterId: string, settings: VoiceSettings) => Promise<void>;
   };
-} 
+}
+
+export interface Script {
+  id: string;
+  title: string;
+  description: string | null;
+  userId: string;
+  createdAt: FirebaseFirestoreTypes.Timestamp;
+  updatedAt: FirebaseFirestoreTypes.Timestamp;
+  status: 'draft' | 'in_progress' | 'completed';
+  scenes: ScriptScene[];
+  characters: ScriptCharacter[];
+  settings: ScriptSetting[];
+}
+
+export type NewScriptData = Omit<Script, 'id' | 'createdAt' | 'updatedAt'>; 

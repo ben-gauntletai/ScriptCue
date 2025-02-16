@@ -3,6 +3,8 @@
   "compilerOptions": {
     "jsx": "react-native",
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": ["./src/types"]
   }
 }

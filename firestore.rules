@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scripts/{scriptId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      
+      allow create: if request.auth != null 
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.status in ['draft', 'in_progress', 'completed']
+        && request.resource.data.scenes is list
+        && request.resource.data.characters is list
+        && request.resource.data.settings is list;
+      
+      allow update: if request.auth != null 
+        && request.auth.uid == resource.data.userId
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.status in ['draft', 'in_progress', 'completed']
+        && request.resource.data.scenes is list
+        && request.resource.data.characters is list
+        && request.resource.data.settings is list;
+      
+      allow delete: if request.auth != null && request.auth.uid == resource.data.userId;
+    }
+
+    match /sessions/{sessionId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      
+      allow create: if request.auth != null 
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.scriptId is string
+        && request.resource.data.scriptId.size() > 0
+        && request.resource.data.status in ['active', 'paused', 'completed']
+        && request.resource.data.currentLine is number
+        && request.resource.data.currentLine >= 0;
+      
+      allow update: if request.auth != null 
+        && request.auth.uid == resource.data.userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.scriptId == resource.data.scriptId
+        && request.resource.data.status in ['active', 'paused', 'completed']
+        && request.resource.data.currentLine is number
+        && request.resource.data.currentLine >= 0;
+      
+      allow delete: if request.auth != null && request.auth.uid == resource.data.userId;
+    }
+  }
+} 

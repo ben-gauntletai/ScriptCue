@@ -14,8 +14,7 @@ import { Button, Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { AuthStackParamList } from '../../navigation/types';
+import { AuthNavigationProp } from '../../navigation/types';
 import { useForm } from 'react-hook-form';
 import { emailPattern, validationMessages, passwordMinLength } from '../../utils/validation';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -23,11 +22,7 @@ import { colors, typography, shadows } from '../../theme';
 import { haptics } from '../../utils/interaction';
 import { createFormAnimation } from '../../utils/animations';
 import { FormInput } from '../../components/common/FormComponents';
-
-type SignInScreenNavigationProp = NativeStackNavigationProp<
-  AuthStackParamList,
-  'SignIn'
->;
+import { RouteProp } from '@react-navigation/native';
 
 type FormData = {
   email: string;
@@ -37,7 +32,7 @@ type FormData = {
 const { width } = Dimensions.get('window');
 
 export const SignInScreen = () => {
-  const navigation = useNavigation<SignInScreenNavigationProp>();
+  const navigation = useNavigation<AuthNavigationProp>();
   const { signIn, loading } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);

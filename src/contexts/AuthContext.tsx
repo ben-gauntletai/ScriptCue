@@ -1,6 +1,8 @@
 import React, {createContext, useState, useContext, useEffect, useRef} from 'react';
 import auth, {FirebaseAuthTypes} from '@react-native-firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CommonActions, NavigationContainerRef } from '@react-navigation/native';
+import { RootStackParamList } from '../navigation/types';
 
 interface AuthResult {
   success?: string;

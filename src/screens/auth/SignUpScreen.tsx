@@ -14,8 +14,7 @@ import { Button, Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { AuthStackParamList } from '../../navigation/types';
+import { AuthNavigationProp } from '../../navigation/types';
 import { useForm } from 'react-hook-form';
 import { emailPattern, validationMessages } from '../../utils/validation';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -24,11 +23,6 @@ import { colors, shadows, typography } from '../../theme';
 import { FormInput } from '../../components/common/FormComponents';
 import { haptics } from '../../utils/interaction';
 import { createFormAnimation } from '../../utils/animations';
-
-type SignUpScreenNavigationProp = NativeStackNavigationProp<
-  AuthStackParamList,
-  'SignUp'
->;
 
 type FormData = {
   email: string;
@@ -39,9 +33,10 @@ type FormData = {
 const { width } = Dimensions.get('window');
 
 export const SignUpScreen = () => {
-  const navigation = useNavigation<SignUpScreenNavigationProp>();
+  const navigation = useNavigation<AuthNavigationProp>();
   const { signUp, loading } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [secureTextEntry, setSecureTextEntry] = useState(true);
   const [secureConfirmTextEntry, setSecureConfirmTextEntry] = useState(true);
 
@@ -77,21 +72,38 @@ export const SignUpScreen = () => {
     try {
       haptics.medium();
       setError(null);
+
+      // Validate passwords match
+      if (data.password !== data.confirmPassword) {
+        haptics.error();
+        setError('Passwords do not match');
+        return;
+      }
+
       const result = await signUp(data.email.trim(), data.password);
       
       if (result.success) {
         haptics.success();
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'SignIn' }],
-        });
+        setSuccess('Account created successfully! Please sign in.');
+        navigation.navigate('Login');
       } else if (result.error) {
         haptics.error();
-        setError(result.error);
+        // Handle specific Firebase error messages
+        let errorMessage = result.error;
+        if (result.error.includes('email-already-in-use')) {
+          errorMessage = 'This email is already registered. Please sign in or use a different email.';
+        } else if (result.error.includes('invalid-email')) {
+          errorMessage = 'Please enter a valid email address.';
+        } else if (result.error.includes('weak-password')) {
+          errorMessage = 'Password is too weak. Please use at least 6 characters.';
+        }
+        setError(errorMessage);
       }
     } catch (err) {
       haptics.error();
-      setError(err instanceof Error ? err.message : 'Failed to create account');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create account';
+      setError(errorMessage);
+      console.error('Sign up error:', err);
     }
   };
 
@@ -202,7 +214,7 @@ export const SignUpScreen = () => {
             <TouchableOpacity
               onPress={() => {
                 haptics.light();
-                navigation.navigate('SignIn');
+                navigation.navigate('Login');
               }}
               style={styles.signInButton}>
               <Text style={styles.signInText}>Sign In</Text>

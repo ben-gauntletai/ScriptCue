@@ -98,6 +98,7 @@ export const theme: MD3Theme = {
     onSurface: colors.text,
     onSurfaceVariant: colors.textSecondary,
     outline: colors.border,
+    success: '#4CAF50',
   },
   roundness: 12,
 };

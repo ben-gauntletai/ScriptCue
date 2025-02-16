@@ -1,29 +1,32 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 export type AuthStackParamList = {
-  SignIn: undefined;
+  Login: undefined;
   SignUp: undefined;
 };
 
-export type AppStackParamList = {
-  Home: undefined;
+export type MainStackParamList = {
+  Scripts: undefined;
+  NewScript: undefined;
   UploadScript: undefined;
-  CharacterSelection: {
-    scriptId: string;
-  };
-  ScriptReader: {
-    scriptId: string;
-    character: string;
-  };
+  ScriptDetail: { scriptId: string };
+  CharacterSelection: { scriptId: string };
+  ScriptReader: { scriptId: string; character: string };
+  EditScript: { scriptId: string };
 };
 
 export type RootStackParamList = {
   Auth: NavigatorScreenParams<AuthStackParamList>;
-  App: NavigatorScreenParams<AppStackParamList>;
+  Main: NavigatorScreenParams<MainStackParamList>;
 };
 
+export type AuthNavigationProp = NativeStackNavigationProp<AuthStackParamList>;
+export type MainNavigationProp = NativeStackNavigationProp<MainStackParamList>;
+export type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
 export type MainTabParamList = {
-  Scripts: NavigatorScreenParams<RootStackParamList>;
+  Scripts: NavigatorScreenParams<MainStackParamList>;
   Profile: undefined;
   Settings: undefined;
 }; 

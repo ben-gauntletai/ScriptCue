@@ -86,3 +86,7 @@ android/app/src/main/assets/fonts/Octicons.ttf
 android/app/src/main/assets/fonts/SimpleLineIcons.ttf
 android/app/src/main/assets/fonts/Zocial.ttf
 .vscode/settings.json
+
+# Environment variables
+.env
+database.md

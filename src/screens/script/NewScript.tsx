@@ -5,7 +5,7 @@ import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import firestore from '@react-native-firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
-import { NavigationProp } from '../../navigation/types';
+import { MainNavigationProp } from '../../navigation/types';
 import { NewScriptData, Script } from '../../types/script';
 import firebaseService from '../../services/firebase';
 
@@ -19,7 +19,7 @@ const NewScript = () => {
   const [duplicateScriptId, setDuplicateScriptId] = useState<string | null>(null);
   const [pendingScript, setPendingScript] = useState<NewScriptData | null>(null);
 
-  const navigation = useNavigation<NavigationProp>();
+  const navigation = useNavigation<MainNavigationProp>();
   const { user } = useAuth();
   const theme = useTheme();
 
@@ -55,73 +55,100 @@ const NewScript = () => {
   };
 
   const handleCreate = async () => {
-    if (!user) return;
+    console.log('Starting script creation...');
     
+    if (!user) {
+      console.error('No user found');
+      setError('You must be signed in to create a script');
+      return;
+    }
+
+    if (!title.trim()) {
+      console.log('Title is empty');
+      setError('Title is required');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
+      console.log('Validating form...');
       const isValid = await validateForm();
       if (!isValid) {
-        // If there's a duplicate, show the dialog and store the pending script
         if (duplicateScriptId) {
-          const newScript: NewScriptData = {
-            title: title.trim(),
-            description: description.trim() || null,
-            userId: user.uid,
-            status: 'draft',
-            scenes: [],
-            characters: [],
-            settings: []
-          };
-          setPendingScript(newScript);
           setShowDuplicateDialog(true);
         }
         setLoading(false);
         return;
       }
 
-      await createScript();
-    } catch (err) {
-      console.error('Error creating script:', err);
-      setError('Failed to create script. Please check your connection and try again.');
-      setLoading(false);
-    }
-  };
-
-  const createScript = async () => {
-    if (!user || !title.trim()) return;
-
-    try {
-      const newScript = pendingScript || {
+      console.log('Creating script with title:', title);
+      const scriptId = await firebaseService.createScript({
         title: title.trim(),
-        description: description.trim() || null,
-        userId: user.uid,
+        description: description?.trim(),
         status: 'draft',
         scenes: [],
         characters: [],
         settings: []
-      };
+      });
 
-      const scriptId = await firebaseService.createScript(newScript);
-      navigation.replace('ScriptDetail', { scriptId });
-    } catch (err) {
-      console.error('Error creating script:', err);
-      setError('Failed to create script. Please check your connection and try again.');
-    } finally {
+      console.log('Script created with ID:', scriptId);
+
+      // Navigate to the script detail screen
+      navigation.reset({
+        index: 0,
+        routes: [
+          { 
+            name: 'ScriptDetail',
+            params: { scriptId }
+          }
+        ]
+      });
+    } catch (error) {
+      console.error('Error creating script:', error);
+      setError(error instanceof Error ? error.message : 'Failed to create script');
       setLoading(false);
-      setPendingScript(null);
     }
   };
 
   const handleDuplicateDialogResponse = async (shouldNavigate: boolean) => {
+    console.log('Handling duplicate dialog response:', shouldNavigate);
     setShowDuplicateDialog(false);
+    
     if (shouldNavigate && duplicateScriptId) {
+      console.log('Navigating to existing script:', duplicateScriptId);
       navigation.replace('ScriptDetail', { scriptId: duplicateScriptId });
-    } else if (pendingScript) {
-      // If user wants to create anyway, proceed with creation
+    } else {
+      console.log('Creating new script despite duplicate');
+      // Create a new script without checking for duplicates
       setLoading(true);
-      await createScript();
+      try {
+        const scriptId = await firebaseService.createScript({
+          title: title.trim(),
+          description: description?.trim(),
+          status: 'draft',
+          scenes: [],
+          characters: [],
+          settings: []
+        });
+
+        console.log('Duplicate script created with ID:', scriptId);
+        navigation.reset({
+          index: 0,
+          routes: [
+            { 
+              name: 'ScriptDetail',
+              params: { scriptId }
+            }
+          ]
+        });
+      } catch (error) {
+        console.error('Error creating duplicate script:', error);
+        setError(error instanceof Error ? error.message : 'Failed to create script');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 

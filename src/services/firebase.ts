@@ -2,34 +2,116 @@ import firebase from '@react-native-firebase/app';
 import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 import { Platform } from 'react-native';
+import { NewScriptData } from '../types/script';
 
 class FirebaseService {
   private static instance: FirebaseService;
   private initialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
 
-  private constructor() {}
+  private constructor() {
+    console.log('FirebaseService constructor called');
+    try {
+      // Set Firestore settings immediately in constructor
+      firestore().settings({
+        cacheSizeBytes: firestore.CACHE_SIZE_UNLIMITED,
+        persistence: true
+      });
+      console.log('Firestore settings applied successfully');
+    } catch (error) {
+      console.error('Error applying Firestore settings:', error);
+    }
+  }
 
   static getInstance(): FirebaseService {
     if (!FirebaseService.instance) {
+      console.log('Creating new FirebaseService instance');
       FirebaseService.instance = new FirebaseService();
     }
     return FirebaseService.instance;
   }
 
-  async initialize() {
-    if (this.initialized) return;
+  async initialize(): Promise<void> {
+    if (this.initialized) {
+      console.log('FirebaseService already initialized');
+      return;
+    }
 
+    if (this.initializationPromise) {
+      console.log('Initialization already in progress, waiting...');
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = this._initialize();
+    return this.initializationPromise;
+  }
+
+  private async _initialize(): Promise<void> {
     try {
-      // Enable Firestore offline persistence
-      await firestore().settings({
-        cacheSizeBytes: firestore.CACHE_SIZE_UNLIMITED,
-        persistence: true
+      console.log('Starting Firebase service initialization');
+
+      // Check if Firebase is initialized
+      if (!firebase.apps.length) {
+        console.error('Firebase app not initialized');
+        throw new Error('Firebase must be initialized before FirebaseService');
+      }
+
+      // Log the current app configuration
+      const app = firebase.app();
+      console.log('Using Firebase app:', {
+        name: app.name,
+        options: {
+          projectId: app.options.projectId,
+          storageBucket: app.options.storageBucket,
+          messagingSenderId: app.options.messagingSenderId,
+        }
       });
 
+      // Log Firestore instance details
+      const db = firestore();
+      console.log('Firestore instance:', {
+        app: db.app.name,
+        projectId: db.app.options.projectId
+      });
+
+      // Basic connection test with timeout
+      try {
+        console.log('Testing Firestore connection...');
+        
+        // Create a timeout promise
+        const timeout = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Connection test timed out')), 15000);
+        });
+
+        // Create the test operation promise
+        const connectionTest = (async () => {
+          try {
+            console.log('Attempting to access Firestore...');
+            // Instead of trying to read data, just check if Firestore is available
+            await firestore().app.options;
+            console.log('Firestore connection test successful');
+            return true;
+          } catch (error: any) {
+            console.error('Error in Firestore access:', error);
+            throw error;
+          }
+        })();
+
+        // Race between timeout and connection test
+        await Promise.race([connectionTest, timeout]);
+        console.log('Connection test completed successfully');
+      } catch (error) {
+        console.error('Error in connection test:', error);
+        throw new Error('Failed to establish Firestore connection. Please check your internet connection and try again.');
+      }
+
       this.initialized = true;
-      console.log('Firebase initialized successfully');
+      this.initializationPromise = null;
+      console.log('Firebase service initialization completed successfully');
     } catch (error) {
-      console.error('Error initializing Firebase:', error);
+      this.initializationPromise = null;
+      this.initialized = false;
+      console.error('Firebase service initialization failed:', error);
       throw error;
     }
   }
@@ -52,22 +134,79 @@ class FirebaseService {
   }
 
   // Firestore methods
-  async createScript(data: any): Promise<string> {
+  async createScript(scriptData: NewScriptData): Promise<string> {
     try {
+      console.log('=== Starting createScript process ===');
+      
+      if (!this.initialized) {
+        console.log('Service not initialized, initializing...');
+        await this.initialize();
+        console.log('Service initialization complete');
+      }
+
       const user = auth().currentUser;
+      console.log('Current user ID:', user?.uid);
       if (!user) throw new Error('User not authenticated');
 
-      const docRef = await firestore()
-        .collection('scripts')
-        .add({
-          ...data,
-          userId: user.uid,
-          createdAt: firestore.FieldValue.serverTimestamp(),
-          updatedAt: firestore.FieldValue.serverTimestamp()
-        });
+      // Validate required fields
+      if (!scriptData.title?.trim()) {
+        throw new Error('Title is required');
+      }
 
-      return docRef.id;
+      const now = firestore.Timestamp.now();
+      console.log('Generated timestamp:', now.toDate());
+
+      // Create the document data
+      const firestoreData = {
+        title: scriptData.title.trim(),
+        description: scriptData.description?.trim() || null,
+        userId: user.uid,
+        status: scriptData.status || 'draft',
+        scenes: Array.isArray(scriptData.scenes) ? scriptData.scenes : [],
+        characters: Array.isArray(scriptData.characters) ? scriptData.characters : [],
+        settings: Array.isArray(scriptData.settings) ? scriptData.settings : [],
+        createdAt: now,
+        updatedAt: now
+      };
+
+      console.log('Prepared document data:', JSON.stringify(firestoreData, null, 2));
+
+      try {
+        console.log('Attempting to write to Firestore...');
+        // Direct write instead of batch for simplicity in debugging
+        const docRef = await firestore()
+          .collection('scripts')
+          .add(firestoreData);
+
+        console.log('Write successful, document ID:', docRef.id);
+
+        // Immediate verification
+        console.log('Verifying document...');
+        const doc = await docRef.get();
+        console.log('Document exists:', doc.exists);
+        console.log('Document data:', doc.data());
+
+        if (!doc.exists) {
+          throw new Error('Script document was not created properly');
+        }
+
+        console.log('=== Script creation completed successfully ===');
+        return docRef.id;
+      } catch (writeError: any) {
+        console.error('Firestore write error:', writeError);
+        console.error('Error code:', writeError.code);
+        console.error('Error message:', writeError.message);
+        if (writeError.details) {
+          console.error('Error details:', writeError.details);
+        }
+        throw writeError;
+      }
     } catch (error: any) {
+      console.error('=== Script creation failed ===');
+      console.error('Error in createScript:', error);
+      console.error('Error type:', typeof error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
       throw this.handleFirestoreError(error);
     }
   }

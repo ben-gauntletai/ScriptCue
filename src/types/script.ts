@@ -75,12 +75,20 @@ export interface Script {
   title: string;
   description: string | null;
   userId: string;
-  createdAt: FirebaseFirestoreTypes.Timestamp;
-  updatedAt: FirebaseFirestoreTypes.Timestamp;
+  createdAt: Date | null;
+  updatedAt: Date | null;
   status: 'draft' | 'in_progress' | 'completed';
   scenes: ScriptScene[];
   characters: ScriptCharacter[];
   settings: ScriptSetting[];
 }
 
-export type NewScriptData = Omit<Script, 'id' | 'createdAt' | 'updatedAt'>; 
+export interface NewScriptData {
+  title: string;
+  description?: string | null;
+  status?: 'draft' | 'in_progress' | 'completed';
+  scenes?: any[];
+  characters?: any[];
+  settings?: any[];
+  userId?: string;
+} 

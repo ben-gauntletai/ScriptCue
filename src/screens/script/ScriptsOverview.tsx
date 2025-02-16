@@ -26,8 +26,13 @@ const ScriptsOverview = () => {
 
   useEffect(() => {
     if (!user) {
+      console.log('No authenticated user found in ScriptsOverview');
+      setLoading(false);
       return;
     }
+
+    console.log('Setting up scripts listener for user:', user.uid, 'Email:', user.email);
+    let isFirstLoad = true;
 
     // Set up real-time listener
     const unsubscribe = firestore()
@@ -36,13 +41,74 @@ const ScriptsOverview = () => {
       .orderBy('updatedAt', 'desc')
       .onSnapshot(
         snapshot => {
-          const scriptsData = snapshot.docs.map(doc => ({
-            ...doc.data(),
-            id: doc.id,
-          } as Script));
-          setScripts(scriptsData);
-          setLoading(false);
-          setRefreshing(false);
+          try {
+            console.log('Received scripts update, document count:', snapshot.docs.length);
+            const scriptsData = snapshot.docs.map(doc => {
+              const data = doc.data();
+              console.log('Raw script data:', data);
+              
+              // Convert timestamps
+              let createdAt = null;
+              let updatedAt = null;
+
+              try {
+                if (data.createdAt?.toDate) {
+                  createdAt = data.createdAt.toDate();
+                } else if (data.createdAt) {
+                  createdAt = new Date(data.createdAt);
+                }
+                
+                if (data.updatedAt?.toDate) {
+                  updatedAt = data.updatedAt.toDate();
+                } else if (data.updatedAt) {
+                  updatedAt = new Date(data.updatedAt);
+                }
+              } catch (err) {
+                console.error('Error converting timestamps:', err, data);
+              }
+
+              const scriptData = {
+                ...data,
+                id: doc.id,
+                createdAt,
+                updatedAt,
+                // Ensure all required fields have default values
+                title: data.title || 'Untitled',
+                description: data.description || null,
+                status: data.status || 'draft',
+                scenes: Array.isArray(data.scenes) ? data.scenes : [],
+                characters: Array.isArray(data.characters) ? data.characters : [],
+                settings: Array.isArray(data.settings) ? data.settings : []
+              } as Script;
+
+              console.log('Processed script data:', { 
+                id: scriptData.id, 
+                title: scriptData.title, 
+                createdAt: scriptData.createdAt?.toISOString(), 
+                updatedAt: scriptData.updatedAt?.toISOString() 
+              });
+
+              return scriptData;
+            });
+            
+            setScripts(scriptsData);
+            
+            // Only set loading to false on first load
+            if (isFirstLoad) {
+              setLoading(false);
+              isFirstLoad = false;
+            }
+            
+            // Always clear refreshing state
+            setRefreshing(false);
+          } catch (err) {
+            console.error('Error processing scripts snapshot:', err);
+            setSnackbarMessage('Error processing scripts data');
+            setSnackbarType('error');
+            setSnackbarVisible(true);
+            setLoading(false);
+            setRefreshing(false);
+          }
         },
         error => {
           console.error('Error fetching scripts:', error);
@@ -55,8 +121,11 @@ const ScriptsOverview = () => {
       );
 
     // Clean up listener on unmount
-    return () => unsubscribe();
-  }, [user, navigation]);
+    return () => {
+      console.log('Cleaning up scripts listener for user:', user.uid);
+      unsubscribe();
+    };
+  }, [user]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -131,55 +200,68 @@ const ScriptsOverview = () => {
     }
   };
 
-  const renderScript = ({ item }: { item: Script }) => (
-    <Card 
-      style={styles.card} 
-      onPress={() => navigation.navigate('ScriptDetail', { scriptId: item.id })}
-      mode="elevated"
-    >
-      <Card.Content>
-        <View style={styles.cardHeader}>
-          <Text variant="titleLarge" style={styles.title}>{item.title}</Text>
-          <Menu
-            visible={menuVisible === item.id}
-            onDismiss={() => setMenuVisible(null)}
-            anchor={
-              <IconButton
-                icon="dots-vertical"
-                onPress={() => setMenuVisible(item.id)}
+  const renderScript = ({ item }: { item: Script }) => {
+    // Safely format the date
+    const formatDate = (date: Date | null | undefined) => {
+      if (!date) return 'No date';
+      try {
+        return date.toLocaleDateString();
+      } catch (err) {
+        console.error('Error formatting date:', err);
+        return 'Invalid date';
+      }
+    };
+
+    return (
+      <Card 
+        style={styles.card} 
+        onPress={() => navigation.navigate('ScriptDetail', { scriptId: item.id })}
+        mode="elevated"
+      >
+        <Card.Content>
+          <View style={styles.cardHeader}>
+            <Text variant="titleLarge" style={styles.title}>{item.title}</Text>
+            <Menu
+              visible={menuVisible === item.id}
+              onDismiss={() => setMenuVisible(null)}
+              anchor={
+                <IconButton
+                  icon="dots-vertical"
+                  onPress={() => setMenuVisible(item.id)}
+                />
+              }
+            >
+              <Menu.Item 
+                onPress={() => handleEdit(item)} 
+                title="Edit" 
+                leadingIcon="pencil"
               />
-            }
-          >
-            <Menu.Item 
-              onPress={() => handleEdit(item)} 
-              title="Edit" 
-              leadingIcon="pencil"
-            />
-            <Divider />
-            <Menu.Item 
-              onPress={() => handleDeletePress(item)}
-              title="Delete"
-              leadingIcon="delete"
-              titleStyle={{ color: theme.colors.error }}
-            />
-          </Menu>
-        </View>
-        {item.description && (
-          <Text variant="bodyMedium" numberOfLines={2} style={styles.description}>
-            {item.description}
-          </Text>
-        )}
-        <View style={styles.cardFooter}>
-          <Text variant="bodySmall" style={styles.date}>
-            Updated: {item.updatedAt?.toDate().toLocaleDateString()}
-          </Text>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
-            <Text style={styles.statusText}>{item.status}</Text>
+              <Divider />
+              <Menu.Item 
+                onPress={() => handleDeletePress(item)}
+                title="Delete"
+                leadingIcon="delete"
+                titleStyle={{ color: theme.colors.error }}
+              />
+            </Menu>
           </View>
-        </View>
-      </Card.Content>
-    </Card>
-  );
+          {item.description && (
+            <Text variant="bodyMedium" numberOfLines={2} style={styles.description}>
+              {item.description}
+            </Text>
+          )}
+          <View style={styles.cardFooter}>
+            <Text variant="bodySmall" style={styles.date}>
+              Updated: {formatDate(item.updatedAt)}
+            </Text>
+            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
+              <Text style={styles.statusText}>{item.status}</Text>
+            </View>
+          </View>
+        </Card.Content>
+      </Card>
+    );
+  };
 
   if (!user) {
     return null;

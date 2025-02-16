@@ -90,3 +90,4 @@ android/app/src/main/assets/fonts/Zocial.ttf
 # Environment variables
 .env
 database.md
+android/google-services.json

@@ -2,7 +2,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /scripts/{scriptId} {
-      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow read: if request.auth != null && (
+        resource == null || // Allow reading non-existent documents
+        request.auth.uid == resource.data.userId
+      );
       
       allow create: if request.auth != null 
         && request.resource.data.userId == request.auth.uid
@@ -11,7 +14,9 @@ service cloud.firestore {
         && request.resource.data.status in ['draft', 'in_progress', 'completed']
         && request.resource.data.scenes is list
         && request.resource.data.characters is list
-        && request.resource.data.settings is list;
+        && request.resource.data.settings is list
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
       
       allow update: if request.auth != null 
         && request.auth.uid == resource.data.userId
@@ -21,13 +26,18 @@ service cloud.firestore {
         && request.resource.data.status in ['draft', 'in_progress', 'completed']
         && request.resource.data.scenes is list
         && request.resource.data.characters is list
-        && request.resource.data.settings is list;
+        && request.resource.data.settings is list
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
       
       allow delete: if request.auth != null && request.auth.uid == resource.data.userId;
     }
 
     match /sessions/{sessionId} {
-      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow read: if request.auth != null && (
+        resource == null || // Allow reading non-existent documents
+        request.auth.uid == resource.data.userId
+      );
       
       allow create: if request.auth != null 
         && request.resource.data.userId == request.auth.uid

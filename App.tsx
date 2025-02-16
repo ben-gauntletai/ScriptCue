@@ -11,7 +11,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import firebase from '@react-native-firebase/app';
 import { ActivityIndicator, View, Text } from 'react-native';
-import { Provider as PaperProvider } from 'react-native-paper';
+import { Provider as PaperProvider, Button } from 'react-native-paper';
 import { theme, navigationTheme } from './src/theme';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ScriptsOverview, NewScript, ScriptDetail, EditScript } from './src/screens';
@@ -22,6 +22,7 @@ import { CharacterSelectionScreen } from './src/screens/script/CharacterSelectio
 import { ScriptReaderScreen } from './src/screens/script/ScriptReaderScreen';
 import { RootStackParamList, AuthStackParamList, MainStackParamList } from './src/navigation/types';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import firebaseService from './src/services/firebase';
 import {
   FIREBASE_API_KEY,
   FIREBASE_AUTH_DOMAIN,
@@ -30,6 +31,7 @@ import {
   FIREBASE_MESSAGING_SENDER_ID,
   FIREBASE_APP_ID,
 } from '@env';
+import firestore from '@react-native-firebase/firestore';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -89,29 +91,85 @@ const App = () => {
   const [firebaseInitialized, setFirebaseInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const initializeFirebase = async () => {
-      try {
-        if (!firebase.apps.length) {
-          await firebase.initializeApp(firebaseConfig);
-          console.log('Firebase initialized successfully');
-        }
-        setFirebaseInitialized(true);
-      } catch (error) {
-        console.error('Error initializing Firebase:', error);
-        setError('Failed to initialize app. Please restart.');
+  const initializeFirebase = async () => {
+    console.log('Starting Firebase initialization...');
+    console.log('Firebase Config:', {
+      apiKey: firebaseConfig.apiKey,
+      authDomain: firebaseConfig.authDomain,
+      projectId: firebaseConfig.projectId,
+      storageBucket: firebaseConfig.storageBucket,
+      messagingSenderId: firebaseConfig.messagingSenderId,
+      // Don't log the full API key for security
+    });
+    try {
+      // Initialize Firebase app first
+      if (!firebase.apps.length) {
+        console.log('Initializing Firebase app...');
+        firebase.initializeApp(firebaseConfig);
+        console.log('Firebase app initialized successfully');
+      } else {
+        console.log('Firebase app already initialized');
       }
-    };
 
+      // Create a timeout promise
+      const timeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('App initialization timed out')), 30000);
+      });
+
+      // Create the initialization promise
+      const initPromise = (async () => {
+        console.log('Initializing Firebase service...');
+        try {
+          await firebaseService.initialize();
+          console.log('Firebase service initialized successfully');
+          return true;
+        } catch (error) {
+          console.error('Firebase service initialization error:', error);
+          throw error;
+        }
+      })();
+
+      // Race between timeout and initialization
+      await Promise.race([initPromise, timeout]);
+      setFirebaseInitialized(true);
+      console.log('App initialization completed');
+    } catch (error) {
+      console.error('Error in app initialization:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to initialize app';
+      setError(`${errorMessage}. Please check your connection and try again.`);
+      // Reset initialization state
+      setFirebaseInitialized(false);
+    }
+  };
+
+  useEffect(() => {
     initializeFirebase();
+
+    // Cleanup function
+    return () => {
+      setFirebaseInitialized(false);
+      setError(null);
+    };
   }, []);
 
   if (!firebaseInitialized) {
     return (
       <PaperProvider theme={theme}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background, padding: 20 }}>
           {error ? (
-            <Text style={{ color: theme.colors.error, textAlign: 'center', padding: 20 }}>{error}</Text>
+            <>
+              <Text style={{ color: theme.colors.error, textAlign: 'center', marginBottom: 16 }}>{error}</Text>
+              <Button 
+                mode="contained"
+                onPress={() => {
+                  setError(null);
+                  setFirebaseInitialized(false);
+                  initializeFirebase();
+                }}
+              >
+                Retry
+              </Button>
+            </>
           ) : (
             <ActivityIndicator size="large" color={theme.colors.primary} />
           )}

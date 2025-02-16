@@ -54,14 +54,51 @@ const AuthNavigator = () => (
 );
 
 const MainNavigator = () => (
-  <MainStack.Navigator screenOptions={{ headerShown: false }}>
-    <MainStack.Screen name="Scripts" component={ScriptsOverview} />
-    <MainStack.Screen name="NewScript" component={NewScript} />
-    <MainStack.Screen name="UploadScript" component={UploadScriptScreen} />
-    <MainStack.Screen name="ScriptDetail" component={ScriptDetail} />
-    <MainStack.Screen name="CharacterSelection" component={CharacterSelectionScreen} />
-    <MainStack.Screen name="ScriptReader" component={ScriptReaderScreen} />
-    <MainStack.Screen name="EditScript" component={EditScript} />
+  <MainStack.Navigator 
+    screenOptions={{ 
+      headerShown: true,
+      headerBackTitleVisible: false,
+      headerStyle: {
+        backgroundColor: theme.colors.background,
+      },
+      headerTintColor: theme.colors.primary,
+    }}
+  >
+    <MainStack.Screen 
+      name="Scripts" 
+      component={ScriptsOverview}
+      options={{ headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="NewScript" 
+      component={NewScript}
+      options={{ title: 'New Script' }}
+    />
+    <MainStack.Screen 
+      name="UploadScript" 
+      component={UploadScriptScreen}
+      options={{ title: 'Upload Script' }}
+    />
+    <MainStack.Screen 
+      name="ScriptDetail" 
+      component={ScriptDetail}
+      options={{ title: 'Script Details' }}
+    />
+    <MainStack.Screen 
+      name="CharacterSelection" 
+      component={CharacterSelectionScreen}
+      options={{ title: 'Select Character' }}
+    />
+    <MainStack.Screen 
+      name="ScriptReader" 
+      component={ScriptReaderScreen}
+      options={{ title: 'Script Reader' }}
+    />
+    <MainStack.Screen 
+      name="EditScript" 
+      component={EditScript}
+      options={{ title: 'Edit Script' }}
+    />
   </MainStack.Navigator>
 );
 

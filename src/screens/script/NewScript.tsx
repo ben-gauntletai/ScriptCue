@@ -96,15 +96,7 @@ const NewScript = () => {
       console.log('Script created with ID:', scriptId);
 
       // Navigate to the script detail screen
-      navigation.reset({
-        index: 0,
-        routes: [
-          { 
-            name: 'ScriptDetail',
-            params: { scriptId }
-          }
-        ]
-      });
+      navigation.navigate('ScriptDetail', { scriptId });
     } catch (error) {
       console.error('Error creating script:', error);
       setError(error instanceof Error ? error.message : 'Failed to create script');
@@ -118,7 +110,7 @@ const NewScript = () => {
     
     if (shouldNavigate && duplicateScriptId) {
       console.log('Navigating to existing script:', duplicateScriptId);
-      navigation.replace('ScriptDetail', { scriptId: duplicateScriptId });
+      navigation.navigate('ScriptDetail', { scriptId: duplicateScriptId });
     } else {
       console.log('Creating new script despite duplicate');
       // Create a new script without checking for duplicates
@@ -134,15 +126,7 @@ const NewScript = () => {
         });
 
         console.log('Duplicate script created with ID:', scriptId);
-        navigation.reset({
-          index: 0,
-          routes: [
-            { 
-              name: 'ScriptDetail',
-              params: { scriptId }
-            }
-          ]
-        });
+        navigation.navigate('ScriptDetail', { scriptId });
       } catch (error) {
         console.error('Error creating duplicate script:', error);
         setError(error instanceof Error ? error.message : 'Failed to create script');

@@ -20,6 +20,7 @@ import { SignUpScreen } from './src/screens/auth/SignUpScreen';
 import { UploadScriptScreen } from './src/screens/script/UploadScriptScreen';
 import { CharacterSelectionScreen } from './src/screens/script/CharacterSelectionScreen';
 import { ScriptReaderScreen } from './src/screens/script/ScriptReaderScreen';
+import PracticeScript from './src/screens/script/PracticeScript';
 import { RootStackParamList, AuthStackParamList, MainStackParamList } from './src/navigation/types';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import firebaseService from './src/services/firebase';
@@ -98,6 +99,11 @@ const MainNavigator = () => (
       name="EditScript" 
       component={EditScript}
       options={{ title: 'Edit Script' }}
+    />
+    <MainStack.Screen 
+      name="PracticeScript" 
+      component={PracticeScript}
+      options={{ title: 'Practice Script' }}
     />
   </MainStack.Navigator>
 );

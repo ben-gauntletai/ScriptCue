@@ -148,31 +148,67 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   },
   contentCard: {
     marginTop: 8,
-    maxHeight: 300,
   },
   contentScroll: {
-    maxHeight: 280,
   },
   contentText: {
     fontFamily: 'monospace',
     fontSize: 14,
     lineHeight: 20,
+    padding: 8,
+  },
+  dialogueContainer: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.surfaceVariant,
+  },
+  dialogueHeader: {
+    color: theme.colors.onSurfaceVariant,
+    marginBottom: 4,
+  },
+  dialogueLine: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginVertical: 2,
+  },
+  lineNumber: {
+    minWidth: 60,
+    color: theme.colors.onSurfaceVariant,
+  },
+  dialogueText: {
+    flex: 1,
+    color: theme.colors.onSurface,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  practiceButton: {
+    marginRight: 8,
+  },
+  dialogueSubtext: {
+    color: theme.colors.onSurfaceVariant,
+    marginBottom: 16,
+  },
+  characterList: {
+    gap: 8,
+  },
+  characterButton: {
+    marginVertical: 4,
   },
 });
 
 const ScriptDetail: React.FC = () => {
   const [script, setScript] = useState<Script | null>(null);
-  const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
   const [scriptContent, setScriptContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [menuVisible, setMenuVisible] = useState(false);
   const [deleteDialogVisible, setDeleteDialogVisible] = useState(false);
-  const [addSceneDialogVisible, setAddSceneDialogVisible] = useState(false);
-  const [addCharacterDialogVisible, setAddCharacterDialogVisible] = useState(false);
-  const [newSceneName, setNewSceneName] = useState('');
-  const [newCharacterName, setNewCharacterName] = useState('');
-  const [newCharacterGender, setNewCharacterGender] = useState<'male' | 'female' | 'unknown'>('unknown');
   const [error, setError] = useState<string | null>(null);
+  const [practiceDialogVisible, setPracticeDialogVisible] = useState(false);
+  const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<ScriptDetailRouteProp>();
@@ -183,7 +219,6 @@ const ScriptDetail: React.FC = () => {
 
   useEffect(() => {
     let unsubscribe: () => void;
-    let processingUnsubscribe: () => void;
 
     const setupScriptListener = async () => {
       if (!user || !scriptId) return;
@@ -221,23 +256,6 @@ const ScriptDetail: React.FC = () => {
             setLoading(false);
           }
         );
-
-        // Subscribe to processing status
-        processingUnsubscribe = firebaseService.subscribeToProcessingStatus(
-          scriptId,
-          (status: ProcessingStatus) => {
-            console.log('Processing status update:', status);
-            setProcessingStatus(status);
-            
-            // Log when processing completes
-            if (status.status.toLowerCase() === 'completed') {
-              console.log('Script processing completed:', {
-                scriptId,
-                timestamp: status.updatedAt
-              });
-            }
-          }
-        );
       } catch (error: any) {
         console.error('Error setting up listeners:', error);
         setLoading(false);
@@ -249,9 +267,6 @@ const ScriptDetail: React.FC = () => {
     return () => {
       if (unsubscribe) {
         unsubscribe();
-      }
-      if (processingUnsubscribe) {
-        processingUnsubscribe();
       }
     };
   }, [scriptId, user]);
@@ -277,104 +292,15 @@ const ScriptDetail: React.FC = () => {
     navigation.navigate('EditScript', { scriptId });
   };
 
-  const handleAddScene = async () => {
-    if (!script || !newSceneName.trim()) return;
-
-    try {
-      const newScene: ScriptScene = {
-        id: Date.now().toString(),
-        name: newSceneName.trim(),
-        startLine: 0,
-        endLine: 0
-      };
-
-      await firebaseService.updateScript(scriptId, {
-        scenes: [...script.scenes, newScene],
+  const handlePracticePress = () => {
+    if (selectedCharacter) {
+      navigation.navigate('PracticeScript', {
+        scriptId,
+        characterId: selectedCharacter,
       });
-
-      setNewSceneName('');
-      setAddSceneDialogVisible(false);
-    } catch (error) {
-      console.error('Error adding scene:', error);
-      setError('Failed to add scene. Please try again.');
+      setPracticeDialogVisible(false);
+      setSelectedCharacter(null);
     }
-  };
-
-  const handleAddCharacter = async () => {
-    if (!script || !newCharacterName.trim()) return;
-
-    try {
-      const newCharacter: ScriptCharacter = {
-        id: Date.now().toString(),
-        name: newCharacterName.trim(),
-        voiceId: null,
-        gender: newCharacterGender
-      };
-
-      await firebaseService.updateScript(scriptId, {
-        characters: [...script.characters, newCharacter],
-      });
-
-      setNewCharacterName('');
-      setNewCharacterGender('unknown');
-      setAddCharacterDialogVisible(false);
-    } catch (error) {
-      console.error('Error adding character:', error);
-      setError('Failed to add character. Please try again.');
-    }
-  };
-
-  const renderProcessingStatus = () => {
-    if (!processingStatus) return null;
-
-    const getStatusColor = (status: string) => {
-      switch (status.toLowerCase()) {
-        case 'error':
-          return theme.colors.error;
-        case 'completed':
-          return theme.colors.primary;
-        default:
-          return theme.colors.primary;
-      }
-    };
-
-    return (
-      <View style={styles.section}>
-        <Text variant="titleMedium" style={styles.sectionTitle}>
-          Processing Status
-        </Text>
-        <View style={styles.processingStatus}>
-          <View style={styles.statusRow}>
-            <View style={{ flex: 1 }}>
-              <Text variant="titleMedium" style={{ marginBottom: 8 }}>
-                {processingStatus.status}
-              </Text>
-              {processingStatus.progress !== undefined && (
-                <>
-                  <ProgressBar
-                    progress={processingStatus.progress / 100}
-                    color={getStatusColor(processingStatus.status)}
-                    style={styles.progressBar}
-                  />
-                  <Text variant="bodySmall" style={{ marginTop: 4, color: theme.colors.onSurfaceVariant }}>
-                    {processingStatus.progress}% Complete
-                  </Text>
-                </>
-              )}
-              {processingStatus.error && (
-                <Text style={{ color: theme.colors.error, marginTop: 8 }}>
-                  Error: {processingStatus.error}
-                </Text>
-              )}
-            </View>
-            {processingStatus.status.toLowerCase() !== 'completed' && 
-             processingStatus.status.toLowerCase() !== 'error' && (
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-            )}
-          </View>
-        </View>
-      </View>
-    );
   };
 
   const renderAnalysis = () => {
@@ -413,7 +339,7 @@ const ScriptDetail: React.FC = () => {
 
           <View style={styles.characterAnalysis}>
             <Text variant="titleSmall" style={styles.subsectionTitle}>
-              Character Analysis
+              Characters
             </Text>
             {characters.map((char) => (
               <View key={char.name} style={styles.characterRow}>
@@ -440,7 +366,7 @@ const ScriptDetail: React.FC = () => {
         <Card style={styles.contentCard}>
           <Card.Content>
             <ScrollView style={styles.contentScroll}>
-              <Text style={styles.contentText}>
+              <Text style={styles.contentText} selectable>
                 {scriptContent}
               </Text>
             </ScrollView>
@@ -477,25 +403,21 @@ const ScriptDetail: React.FC = () => {
             <Text style={styles.statusText}>{script.status}</Text>
           </View>
         </View>
-        <Menu
-          visible={menuVisible}
-          onDismiss={() => setMenuVisible(false)}
-          anchor={
-            <IconButton
-              icon="dots-vertical"
-              onPress={() => setMenuVisible(true)}
-            />
-          }
-        >
-          <Menu.Item onPress={handleEdit} title="Edit" leadingIcon="pencil" />
-          <Divider />
-          <Menu.Item 
-            onPress={handleDeletePress} 
-            title="Delete" 
-            leadingIcon="delete"
-            titleStyle={{ color: theme.colors.error }}
+        <View style={styles.headerActions}>
+          <Button
+            mode="contained"
+            onPress={() => setPracticeDialogVisible(true)}
+            icon="microphone"
+            style={styles.practiceButton}
+            disabled={!script.analysis?.characters?.length}
+          >
+            Practice
+          </Button>
+          <IconButton
+            icon="dots-vertical"
+            onPress={() => setMenuVisible(true)}
           />
-        </Menu>
+        </View>
       </View>
 
       <ScrollView style={styles.content}>
@@ -510,65 +432,8 @@ const ScriptDetail: React.FC = () => {
           </View>
         )}
 
-        {renderProcessingStatus()}
         {renderAnalysis()}
         {renderContent()}
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
-              Scenes ({script.scenes?.length || 0})
-            </Text>
-            <Button
-              mode="contained"
-              onPress={() => setAddSceneDialogVisible(true)}
-              icon="plus"
-            >
-              Add Scene
-            </Button>
-          </View>
-          {script.scenes.map((scene, index) => (
-            <View key={scene.id} style={styles.listItem}>
-              <Text variant="bodyLarge">{scene.name}</Text>
-              <Text variant="bodySmall">Lines: {scene.startLine} - {scene.endLine}</Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
-              Characters ({script.characters?.length || 0})
-            </Text>
-            <Button
-              mode="contained"
-              onPress={() => setAddCharacterDialogVisible(true)}
-              icon="plus"
-            >
-              Add Character
-            </Button>
-          </View>
-          {script.characters.map((character, index) => (
-            <View key={character.id} style={styles.listItem}>
-              <Text variant="bodyLarge">{character.name}</Text>
-              <Text variant="bodySmall">Gender: {character.gender}</Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={[styles.section, styles.metaSection]}>
-          <Text variant="titleMedium" style={styles.sectionTitle}>
-            Script Information
-          </Text>
-          <View style={styles.metaInfo}>
-            <Text variant="bodyMedium" style={styles.metaText}>
-              Created: {script.createdAt?.toLocaleString()}
-            </Text>
-            <Text variant="bodyMedium" style={styles.metaText}>
-              Last updated: {script.updatedAt?.toLocaleString()}
-            </Text>
-          </View>
-        </View>
       </ScrollView>
 
       <Portal>
@@ -583,61 +448,38 @@ const ScriptDetail: React.FC = () => {
           </Dialog.Actions>
         </Dialog>
 
-        <Dialog visible={addSceneDialogVisible} onDismiss={() => setAddSceneDialogVisible(false)}>
-          <Dialog.Title>Add New Scene</Dialog.Title>
+        <Dialog visible={practiceDialogVisible} onDismiss={() => setPracticeDialogVisible(false)}>
+          <Dialog.Title>Choose Your Character</Dialog.Title>
           <Dialog.Content>
-            <TextInput
-              label="Scene Name"
-              value={newSceneName}
-              onChangeText={setNewSceneName}
-              mode="outlined"
-              style={styles.dialogInput}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setAddSceneDialogVisible(false)}>Cancel</Button>
-            <Button onPress={handleAddScene} disabled={!newSceneName.trim()}>Add</Button>
-          </Dialog.Actions>
-        </Dialog>
-
-        <Dialog visible={addCharacterDialogVisible} onDismiss={() => setAddCharacterDialogVisible(false)}>
-          <Dialog.Title>Add New Character</Dialog.Title>
-          <Dialog.Content>
-            <TextInput
-              label="Character Name"
-              value={newCharacterName}
-              onChangeText={setNewCharacterName}
-              mode="outlined"
-              style={styles.dialogInput}
-            />
-            <View style={styles.genderSelector}>
-              <Text variant="bodyMedium">Gender:</Text>
-              <Button
-                mode={newCharacterGender === 'male' ? 'contained' : 'outlined'}
-                onPress={() => setNewCharacterGender('male')}
-                style={styles.genderButton}
-              >
-                Male
-              </Button>
-              <Button
-                mode={newCharacterGender === 'female' ? 'contained' : 'outlined'}
-                onPress={() => setNewCharacterGender('female')}
-                style={styles.genderButton}
-              >
-                Female
-              </Button>
-              <Button
-                mode={newCharacterGender === 'unknown' ? 'contained' : 'outlined'}
-                onPress={() => setNewCharacterGender('unknown')}
-                style={styles.genderButton}
-              >
-                Unknown
-              </Button>
+            <Text variant="bodyMedium" style={styles.dialogueSubtext}>
+              Select the character you want to practice as. Other characters will be voiced by AI.
+            </Text>
+            <View style={styles.characterList}>
+              {script.analysis?.characters?.map((character) => (
+                <Button
+                  key={character.name}
+                  mode={selectedCharacter === character.name ? "contained" : "outlined"}
+                  onPress={() => setSelectedCharacter(character.name)}
+                  style={styles.characterButton}
+                >
+                  {character.name} ({character.lines} lines)
+                </Button>
+              ))}
             </View>
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setAddCharacterDialogVisible(false)}>Cancel</Button>
-            <Button onPress={handleAddCharacter} disabled={!newCharacterName.trim()}>Add</Button>
+            <Button onPress={() => {
+              setPracticeDialogVisible(false);
+              setSelectedCharacter(null);
+            }}>
+              Cancel
+            </Button>
+            <Button 
+              onPress={handlePracticePress}
+              disabled={!selectedCharacter}
+            >
+              Start Practice
+            </Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

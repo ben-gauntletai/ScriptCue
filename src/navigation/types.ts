@@ -14,6 +14,11 @@ export type MainStackParamList = {
   CharacterSelection: { scriptId: string };
   ScriptReader: { scriptId: string; character: string };
   EditScript: { scriptId: string };
+  PracticeScript: { 
+    scriptId: string;
+    characterId?: string;
+    startLine?: number;
+  };
 };
 
 export type RootStackParamList = {

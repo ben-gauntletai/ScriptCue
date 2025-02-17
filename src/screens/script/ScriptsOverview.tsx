@@ -20,82 +20,99 @@ const ScriptsOverview = () => {
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarType, setSnackbarType] = useState<'success' | 'error'>('success');
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigation = useNavigation<MainNavigationProp>();
   const { user, signOut } = useAuth();
   const theme = useTheme();
 
-  const loadScripts = useCallback(async () => {
+  const loadScripts = useCallback(() => {
     if (!user) {
       console.log('No authenticated user found in ScriptsOverview');
       setLoading(false);
       setError('Please sign in to view your scripts');
-      return;
+      return () => {};
     }
 
     try {
-      console.log('Loading scripts for user:', user.uid);
-      const scriptsSnapshot = await firestore()
+      console.log('Setting up real-time listener for scripts, user:', user.uid);
+      const unsubscribe = firestore()
         .collection('scripts')
         .where('userId', '==', user.uid)
         .orderBy('updatedAt', 'desc')
-        .get();
+        .onSnapshot(
+          (snapshot) => {
+            console.log('Received real-time update, document count:', snapshot.docs.length);
+            const scriptsData = snapshot.docs.map(doc => {
+              const data = doc.data();
+              
+              // Convert timestamps
+              let createdAt = null;
+              let updatedAt = null;
 
-      console.log('Received scripts, document count:', scriptsSnapshot.docs.length);
-      const scriptsData = scriptsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        
-        // Convert timestamps
-        let createdAt = null;
-        let updatedAt = null;
+              try {
+                if (data.createdAt?.toDate) {
+                  createdAt = data.createdAt.toDate();
+                } else if (data.createdAt) {
+                  createdAt = new Date(data.createdAt);
+                }
+                
+                if (data.updatedAt?.toDate) {
+                  updatedAt = data.updatedAt.toDate();
+                } else if (data.updatedAt) {
+                  updatedAt = new Date(data.updatedAt);
+                }
+              } catch (err) {
+                console.error('Error converting timestamps:', err);
+              }
 
-        try {
-          if (data.createdAt?.toDate) {
-            createdAt = data.createdAt.toDate();
-          } else if (data.createdAt) {
-            createdAt = new Date(data.createdAt);
+              return {
+                ...data,
+                id: doc.id,
+                createdAt,
+                updatedAt,
+                title: data.title || 'Untitled',
+                description: data.description || null,
+                status: data.status || 'draft',
+                scenes: Array.isArray(data.scenes) ? data.scenes : [],
+                characters: Array.isArray(data.characters) ? data.characters : [],
+                settings: Array.isArray(data.settings) ? data.settings : []
+              } as Script;
+            });
+
+            setScripts(scriptsData);
+            setError(null);
+            setLoading(false);
+            setRefreshing(false);
+          },
+          (error) => {
+            console.error('Error in scripts listener:', error);
+            setError('Failed to load scripts. Please try again.');
+            setSnackbarMessage('Failed to load scripts');
+            setSnackbarType('error');
+            setSnackbarVisible(true);
+            setLoading(false);
+            setRefreshing(false);
           }
-          
-          if (data.updatedAt?.toDate) {
-            updatedAt = data.updatedAt.toDate();
-          } else if (data.updatedAt) {
-            updatedAt = new Date(data.updatedAt);
-          }
-        } catch (err) {
-          console.error('Error converting timestamps:', err);
-        }
+        );
 
-        return {
-          ...data,
-          id: doc.id,
-          createdAt,
-          updatedAt,
-          title: data.title || 'Untitled',
-          description: data.description || null,
-          status: data.status || 'draft',
-          scenes: Array.isArray(data.scenes) ? data.scenes : [],
-          characters: Array.isArray(data.characters) ? data.characters : [],
-          settings: Array.isArray(data.settings) ? data.settings : []
-        } as Script;
-      });
-
-      setScripts(scriptsData);
-      setError(null);
+      return unsubscribe;
     } catch (err) {
-      console.error('Error loading scripts:', err);
+      console.error('Error setting up scripts listener:', err);
       setError('Failed to load scripts. Please try again.');
       setSnackbarMessage('Failed to load scripts');
       setSnackbarType('error');
       setSnackbarVisible(true);
-    } finally {
       setLoading(false);
       setRefreshing(false);
+      return () => {};
     }
   }, [user]);
 
   useEffect(() => {
-    loadScripts();
+    const unsubscribe = loadScripts();
+    return () => {
+      unsubscribe();
+    };
   }, [loadScripts]);
 
   const onRefresh = useCallback(() => {
@@ -104,16 +121,6 @@ const ScriptsOverview = () => {
   }, [loadScripts]);
 
   const handleCreateScript = () => {
-    setShowCreateDialog(true);
-  };
-
-  const handleNewScript = () => {
-    setShowCreateDialog(false);
-    navigation.navigate('NewScript');
-  };
-
-  const handleUploadScript = () => {
-    setShowCreateDialog(false);
     navigation.navigate('UploadScript');
   };
 
@@ -357,20 +364,6 @@ const ScriptsOverview = () => {
             >
               Delete
             </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
-
-      <Portal>
-        <Dialog visible={showCreateDialog} onDismiss={() => setShowCreateDialog(false)}>
-          <Dialog.Title>Create New Script</Dialog.Title>
-          <Dialog.Content>
-            <Text variant="bodyMedium">Choose how you want to create your script:</Text>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setShowCreateDialog(false)}>Cancel</Button>
-            <Button onPress={handleNewScript}>Create Empty</Button>
-            <Button mode="contained" onPress={handleUploadScript}>Upload PDF</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

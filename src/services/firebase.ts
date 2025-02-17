@@ -590,6 +590,29 @@ class FirebaseService {
       throw this.handleFirestoreError(error);
     }
   }
+
+  async getScript(scriptId: string): Promise<Script | null> {
+    try {
+      const doc = await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .get();
+
+      if (doc.exists) {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data?.createdAt?.toDate() || null,
+          updatedAt: data?.updatedAt?.toDate() || null,
+        } as Script;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting script:', error);
+      throw error;
+    }
+  }
 }
 
 export default FirebaseService.getInstance();

@@ -306,6 +306,9 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
     // Dialogue detection - capture the line after a character name
     else if (currentCharacter && trimmedLine.length > 0 && 
              !upperLine.startsWith("INT.") && !upperLine.startsWith("EXT.")) {
+      if (!characters[currentCharacter].dialogue) {
+        characters[currentCharacter].dialogue = [];
+      }
       characters[currentCharacter].dialogue.push({
         text: trimmedLine,
         lineNumber: absoluteLineNumber,

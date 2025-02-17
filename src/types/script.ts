@@ -30,6 +30,12 @@ export interface ScriptCharacter {
   name: string;
   voiceId: string | null;
   gender: 'male' | 'female' | 'unknown';
+  lines: number;
+  firstAppearance: number;
+  dialogue: Array<{
+    text: string;
+    lineNumber: number;
+  }>;
 }
 
 export interface ScriptScene {
@@ -58,6 +64,10 @@ export interface ScriptAnalysis {
     name: string;
     lines: number;
     firstAppearance: number;
+    dialogue?: Array<{
+      text: string;
+      lineNumber: number;
+    }>;
   }>;
   scenes: Array<{
     name: string;

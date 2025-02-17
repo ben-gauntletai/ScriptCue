@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
-import { Text, Button, useTheme, IconButton, Menu, Divider, Portal, Dialog, FAB, TextInput, ProgressBar, MD3Theme, Card } from 'react-native-paper';
+import { Text, Button, useTheme, IconButton, Menu, Divider, Portal, Dialog, FAB, TextInput, ProgressBar, MD3Theme, Card, RadioButton } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,8 +8,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script, ScriptScene, ScriptCharacter, ProcessingStatus } from '../../types/script';
 import firebaseService from '../../services/firebase';
 import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import Sound from 'react-native-sound';
 
 type ScriptDetailRouteProp = RouteProp<MainStackParamList, 'ScriptDetail'>;
+
+type VoiceOption = 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'onyx' | 'nova' | 'sage' | 'shimmer';
+
+const VOICE_OPTIONS: VoiceOption[] = ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'];
+
+interface VoiceSettings {
+  voice: VoiceOption;
+  testText: string;
+}
 
 const createStyles = (theme: MD3Theme) => StyleSheet.create({
   container: {
@@ -43,16 +53,6 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   title: {
     flex: 1,
     color: theme.colors.onBackground,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusText: {
-    color: theme.colors.onPrimary,
-    fontSize: 12,
-    textTransform: 'capitalize',
   },
   content: {
     flex: 1,
@@ -198,6 +198,41 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   characterButton: {
     marginVertical: 4,
   },
+  voiceSettingsDialog: {
+    maxHeight: '80%',
+  },
+  voiceOptionContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.surfaceVariant,
+  },
+  voiceInfo: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  voiceName: {
+    textTransform: 'capitalize',
+  },
+  testButton: {
+    marginLeft: 8,
+  },
+  testingIndicator: {
+    marginLeft: 8,
+  },
+  testTextInput: {
+    marginBottom: 16,
+  },
+  voiceDescription: {
+    fontSize: 12,
+    color: theme.colors.onSurfaceVariant,
+    marginTop: 2,
+  },
+  scrollContent: {
+    paddingBottom: 16,
+  },
 });
 
 const ScriptDetail: React.FC = () => {
@@ -209,6 +244,16 @@ const ScriptDetail: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [practiceDialogVisible, setPracticeDialogVisible] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
+  const [renameDialogVisible, setRenameDialogVisible] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [voiceSettingsVisible, setVoiceSettingsVisible] = useState(false);
+  const [selectedCharacterForVoice, setSelectedCharacterForVoice] = useState<string | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState<VoiceOption>('alloy');
+  const [testingVoice, setTestingVoice] = useState<VoiceOption | null>(null);
+  const [voiceTestError, setVoiceTestError] = useState<string | null>(null);
+  const [sound, setSound] = useState<Sound | null>(null);
+  const [testText, setTestText] = useState<string>('');
+  const [characterVoices, setCharacterVoices] = useState<Record<string, VoiceSettings>>({});
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<ScriptDetailRouteProp>();
@@ -271,6 +316,18 @@ const ScriptDetail: React.FC = () => {
     };
   }, [scriptId, user]);
 
+  useEffect(() => {
+    // Enable playback in silence mode
+    Sound.setCategory('Playback');
+
+    return () => {
+      // Cleanup sound when component unmounts
+      if (sound) {
+        sound.release();
+      }
+    };
+  }, [sound]);
+
   const handleDeletePress = () => {
     setMenuVisible(false);
     setDeleteDialogVisible(true);
@@ -287,11 +344,6 @@ const ScriptDetail: React.FC = () => {
     }
   };
 
-  const handleEdit = () => {
-    setMenuVisible(false);
-    navigation.navigate('EditScript', { scriptId });
-  };
-
   const handlePracticePress = () => {
     if (selectedCharacter) {
       navigation.navigate('PracticeScript', {
@@ -300,6 +352,119 @@ const ScriptDetail: React.FC = () => {
       });
       setPracticeDialogVisible(false);
       setSelectedCharacter(null);
+    }
+  };
+
+  const handleTestVoice = async (voice: VoiceOption) => {
+    setTestingVoice(voice);
+    setVoiceTestError(null);
+    
+    if (sound) {
+      sound.release();
+      setSound(null);
+    }
+    
+    try {
+      const textToTest = testText || `This is a test of the ${voice} voice.`;
+      const audioUrl = await firebaseService.testVoice(voice, textToTest);
+      
+      const newSound = new Sound(audioUrl, '', (error: any) => {
+        if (error) {
+          console.error('Error loading sound:', error);
+          setVoiceTestError('Failed to load audio. Please try again.');
+          setTestingVoice(null);
+          return;
+        }
+        
+        newSound.play((success: boolean) => {
+          if (!success) {
+            console.error('Error playing sound');
+            setVoiceTestError('Failed to play audio. Please try again.');
+          }
+          setTestingVoice(null);
+        });
+      });
+      
+      setSound(newSound);
+    } catch (error) {
+      console.error('Error testing voice:', error);
+      setVoiceTestError('Failed to test voice. Please try again.');
+      setTestingVoice(null);
+    }
+  };
+
+  const handleSaveVoiceSettings = async () => {
+    if (!selectedCharacterForVoice) return;
+    
+    try {
+      const updatedVoices = {
+        ...characterVoices,
+        [selectedCharacterForVoice]: {
+          voice: selectedVoice,
+          testText: testText
+        }
+      };
+      
+      await firebaseService.saveCharacterVoices(scriptId, updatedVoices);
+      setCharacterVoices(updatedVoices);
+      setVoiceSettingsVisible(false);
+      setSelectedCharacterForVoice(null);
+    } catch (error) {
+      console.error('Error saving voice settings:', error);
+      setVoiceTestError('Failed to save voice settings. Please try again.');
+    }
+  };
+
+  const handleAssignVoice = (characterName: string) => {
+    setSelectedCharacterForVoice(characterName);
+    // Set initial test text from character's first line
+    const character = script?.analysis?.characters.find(c => c.name === characterName);
+    if (character?.dialogue?.[0]) {
+      setTestText(character.dialogue[0].text);
+    }
+    // Load existing voice settings if they exist
+    if (characterVoices[characterName]) {
+      setSelectedVoice(characterVoices[characterName].voice as VoiceOption);
+      setTestText(characterVoices[characterName].testText);
+    } else {
+      setSelectedVoice('alloy');
+    }
+    setVoiceSettingsVisible(true);
+  };
+
+  const getVoiceDescription = (voice: VoiceOption): string => {
+    const descriptions: Record<VoiceOption, string> = {
+      alloy: 'Neutral, balanced voice',
+      echo: 'Warm, natural voice',
+      fable: 'British, authoritative voice',
+      onyx: 'Deep, resonant voice',
+      nova: 'Energetic, youthful voice',
+      shimmer: 'Clear, bright voice',
+      ash: 'Soft, gentle voice',
+      coral: 'Expressive, dynamic voice',
+      sage: 'Mature, thoughtful voice'
+    };
+    return descriptions[voice];
+  };
+
+  const handleRename = () => {
+    setMenuVisible(false);
+    setNewTitle(script?.title || '');
+    setRenameDialogVisible(true);
+  };
+
+  const handleRenameConfirm = async () => {
+    if (!script || !newTitle.trim()) return;
+
+    try {
+      await firebaseService.updateScript(script.id, {
+        title: newTitle.trim(),
+        updatedAt: new Date()
+      });
+      setRenameDialogVisible(false);
+    } catch (error) {
+      console.error('Error renaming script:', error);
+      setError('Failed to rename script. Please try again.');
     }
   };
 
@@ -343,10 +508,18 @@ const ScriptDetail: React.FC = () => {
             </Text>
             {characters.map((char) => (
               <View key={char.name} style={styles.characterRow}>
-                <Text variant="bodyMedium">{char.name}</Text>
-                <Text variant="bodySmall">
-                  {char.lines} lines (First appearance: line {char.firstAppearance})
-                </Text>
+                <View style={{ flex: 1 }}>
+                  <Text variant="bodyMedium">{char.name}</Text>
+                  <Text variant="bodySmall">
+                    {char.lines} lines (First appearance: line {char.firstAppearance})
+                  </Text>
+                </View>
+                <Button
+                  mode="outlined"
+                  onPress={() => handleAssignVoice(char.name)}
+                >
+                  {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
+                </Button>
               </View>
             ))}
           </View>
@@ -399,9 +572,6 @@ const ScriptDetail: React.FC = () => {
           <Text variant="headlineMedium" style={styles.title}>
             {script.title}
           </Text>
-          <View style={[styles.statusBadge, { backgroundColor: theme.colors.primary }]}>
-            <Text style={styles.statusText}>{script.status}</Text>
-          </View>
         </View>
         <View style={styles.headerActions}>
           <Button
@@ -413,10 +583,28 @@ const ScriptDetail: React.FC = () => {
           >
             Practice
           </Button>
-          <IconButton
-            icon="dots-vertical"
-            onPress={() => setMenuVisible(true)}
-          />
+          <Menu
+            visible={menuVisible}
+            onDismiss={() => setMenuVisible(false)}
+            anchor={
+              <IconButton
+                icon="dots-vertical"
+                onPress={() => setMenuVisible(true)}
+              />
+            }
+          >
+            <Menu.Item 
+              onPress={handleRename}
+              title="Rename"
+              leadingIcon="text"
+            />
+            <Menu.Item 
+              onPress={handleDeletePress}
+              title="Delete"
+              leadingIcon="delete"
+              titleStyle={{ color: theme.colors.error }}
+            />
+          </Menu>
         </View>
       </View>
 
@@ -479,6 +667,98 @@ const ScriptDetail: React.FC = () => {
               disabled={!selectedCharacter}
             >
               Start Practice
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog 
+          visible={voiceSettingsVisible} 
+          onDismiss={() => {
+            setVoiceSettingsVisible(false);
+            setSelectedCharacterForVoice(null);
+          }}
+          style={styles.voiceSettingsDialog}
+        >
+          <Dialog.Title>Voice Settings for {selectedCharacterForVoice}</Dialog.Title>
+          <Dialog.ScrollArea>
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+              <TextInput
+                label="Test Text"
+                value={testText}
+                onChangeText={setTestText}
+                mode="outlined"
+                multiline
+                numberOfLines={3}
+                style={styles.testTextInput}
+                placeholder="Enter text to test the voice with..."
+              />
+              
+              {VOICE_OPTIONS.map((voice) => (
+                <View key={voice} style={styles.voiceOptionContainer}>
+                  <RadioButton
+                    value={voice}
+                    status={selectedVoice === voice ? 'checked' : 'unchecked'}
+                    onPress={() => setSelectedVoice(voice)}
+                  />
+                  <View style={styles.voiceInfo}>
+                    <Text style={styles.voiceName}>{voice}</Text>
+                    <Text style={styles.voiceDescription}>
+                      {getVoiceDescription(voice)}
+                    </Text>
+                  </View>
+                  {testingVoice === voice ? (
+                    <ActivityIndicator size="small" style={styles.testingIndicator} />
+                  ) : (
+                    <Button 
+                      mode="outlined"
+                      onPress={() => handleTestVoice(voice)}
+                      style={styles.testButton}
+                      disabled={!!testingVoice}
+                    >
+                      Test
+                    </Button>
+                  )}
+                </View>
+              ))}
+              {voiceTestError && (
+                <Text style={{ color: theme.colors.error, marginTop: 8 }}>
+                  {voiceTestError}
+                </Text>
+              )}
+            </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button onPress={() => {
+              setVoiceSettingsVisible(false);
+              setSelectedCharacterForVoice(null);
+            }}>
+              Cancel
+            </Button>
+            <Button onPress={handleSaveVoiceSettings} mode="contained">
+              Save
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={renameDialogVisible} onDismiss={() => setRenameDialogVisible(false)}>
+          <Dialog.Title>Rename Script</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="Script Title"
+              value={newTitle}
+              onChangeText={setNewTitle}
+              mode="outlined"
+              autoFocus
+              style={{ marginTop: 8 }}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button
+              onPress={handleRenameConfirm}
+              mode="contained"
+              disabled={!newTitle.trim()}
+            >
+              Save
             </Button>
           </Dialog.Actions>
         </Dialog>

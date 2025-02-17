@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, Platform, PermissionsAndroid } from 'react-native';
-import { Text, Button, useTheme, ProgressBar, Portal, Dialog, IconButton } from 'react-native-paper';
+import { Text, Button, useTheme, ProgressBar, Portal, Dialog, IconButton, TextInput } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { MainNavigationProp } from '../../navigation/types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -13,6 +13,7 @@ import DocumentPicker, {
 import RNFS from 'react-native-fs';
 import firebaseService from '../../services/firebase';
 import { v4 as uuidv4 } from 'uuid';
+import firestore from '@react-native-firebase/firestore';
 
 // Add type definitions
 interface ProcessingStatus {
@@ -29,6 +30,9 @@ const UploadScript: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [processingProgress, setProcessingProgress] = useState<number | null>(null);
+  const [renameDialogVisible, setRenameDialogVisible] = useState(false);
+  const [scriptTitle, setScriptTitle] = useState('');
+  const [completedScriptId, setCompletedScriptId] = useState<string | null>(null);
 
   const navigation = useNavigation<MainNavigationProp>();
   const { user } = useAuth();
@@ -161,14 +165,10 @@ const UploadScript: React.FC = () => {
 
       // Create script document
       const scriptId = uuidv4();
-      const scriptData = {
-        id: scriptId,
-        title: file.name?.replace('.pdf', '') || 'Untitled Script',
-        uploadStatus: 'uploading' as const,
-        userId: user?.uid
-      };
 
-      await firebaseService.createScript(scriptData);
+      if (!user?.uid) {
+        throw new Error('User not authenticated');
+      }
 
       // Start upload
       await uploadFile(file, localPath, scriptId);
@@ -209,6 +209,17 @@ const UploadScript: React.FC = () => {
         scriptId
       });
 
+      // Create initial script document
+      await firestore().collection('scripts').doc(scriptId).set({
+        userId: user.uid,
+        title: file.name?.replace('.pdf', '') || 'Untitled Script',
+        originalFileName: file.name || 'Untitled Script.pdf',
+        description: '',
+        uploadStatus: 'uploading',
+        createdAt: firestore.Timestamp.now(),
+        updatedAt: firestore.Timestamp.now(),
+      });
+
       // Upload the file
       const fileUrl = await firebaseService.uploadScript(
         localFilePath,
@@ -222,44 +233,71 @@ const UploadScript: React.FC = () => {
       );
 
       // Update the script document with the file URL
-      const updateData = {
+      await firestore().collection('scripts').doc(scriptId).update({
         fileUrl,
-        originalFileName: file.name,
-        uploadStatus: 'processing' as const
-      };
-
-      await firebaseService.updateScript(scriptId, updateData);
+        uploadStatus: 'processing',
+        updatedAt: firestore.Timestamp.now()
+      });
 
       console.log('File uploaded successfully, setting up processing listener...');
 
-      const unsubscribe = firebaseService.listenToScriptProcessingStatus(
-        scriptId,
-        (status: ProcessingStatus) => {
-          console.log('Processing status update:', status);
-          setProcessingStatus(status.status);
-          setProcessingProgress(status.progress || null);
+      return new Promise((resolve, reject) => {
+        const unsubscribe = firebaseService.listenToScriptProcessingStatus(
+          scriptId,
+          (status: ProcessingStatus) => {
+            console.log('Processing status update:', status);
+            setProcessingStatus(status.status);
+            setProcessingProgress(status.progress || null);
 
-          if (status.status === 'completed') {
-            console.log('Processing completed, navigating to detail screen...');
+            if (status.status === 'completed') {
+              console.log('Processing completed, navigating back...');
+              unsubscribe();
+              navigation.replace('Scripts', {
+                newScriptId: scriptId,
+                scriptTitle: file.name?.replace('.pdf', '') || 'Untitled Script'
+              });
+              resolve(true);
+            } else if (status.status === 'error') {
+              console.error('Processing error:', status.error);
+              const errorMessage = status.error || 'An error occurred during processing';
+              setError(errorMessage);
+              unsubscribe();
+              reject(new Error(errorMessage));
+            }
+          },
+          (error: Error) => {
+            console.error('Error listening to processing status:', error);
+            setError('Failed to monitor processing status');
             unsubscribe();
-            navigation.replace('ScriptDetail', { scriptId });
-          } else if (status.status === 'error') {
-            console.error('Processing error:', status.error);
-            setError(status.error || 'An error occurred during processing');
-            unsubscribe();
+            reject(error);
           }
-        },
-        (error: Error) => {
-          console.error('Error listening to processing status:', error);
-          setError('Failed to monitor processing status');
-          unsubscribe();
-        }
-      );
+        );
+      });
     } catch (err) {
       console.error('Error uploading file:', err);
       setError('Failed to upload file. Please try again.');
+      throw err;
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleRenameScript = async () => {
+    if (!completedScriptId || !scriptTitle.trim()) return;
+
+    try {
+      await firestore()
+        .collection('scripts')
+        .doc(completedScriptId)
+        .update({
+          title: scriptTitle.trim(),
+          updatedAt: firestore.Timestamp.now()
+        });
+
+      navigation.replace('ScriptDetail', { scriptId: completedScriptId });
+    } catch (error) {
+      console.error('Error renaming script:', error);
+      setError('Failed to rename script');
     }
   };
 
@@ -388,6 +426,43 @@ const UploadScript: React.FC = () => {
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setError(null)}>OK</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog 
+          visible={renameDialogVisible} 
+          onDismiss={() => {
+            setRenameDialogVisible(false);
+            navigation.replace('ScriptDetail', { scriptId: completedScriptId! });
+          }}
+        >
+          <Dialog.Title>Name Your Script</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="Script Title"
+              value={scriptTitle}
+              onChangeText={setScriptTitle}
+              mode="outlined"
+              autoFocus
+              style={{ marginTop: 8 }}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button 
+              onPress={() => {
+                setRenameDialogVisible(false);
+                navigation.replace('ScriptDetail', { scriptId: completedScriptId! });
+              }}
+            >
+              Skip
+            </Button>
+            <Button
+              onPress={handleRenameScript}
+              mode="contained"
+              disabled={!scriptTitle.trim()}
+            >
+              Save
+            </Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

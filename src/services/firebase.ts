@@ -4,6 +4,12 @@ import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firest
 import storage from '@react-native-firebase/storage';
 import { Platform } from 'react-native';
 import { NewScriptData, Script, ScriptProcessingStatus, ProcessingStatus } from '../types/script';
+import functions from '@react-native-firebase/functions';
+
+interface CharacterVoiceSettings {
+  voice: string;
+  testText: string;
+}
 
 class FirebaseService {
   private static instance: FirebaseService | null = null;
@@ -611,6 +617,94 @@ class FirebaseService {
     } catch (error) {
       console.error('Error getting script:', error);
       throw error;
+    }
+  }
+
+  async testVoice(voice: string, text: string): Promise<string> {
+    try {
+      console.log('Testing voice with params:', {
+        voice,
+        textLength: text.length,
+        textPreview: text.substring(0, 50) + (text.length > 50 ? '...' : '')
+      });
+
+      const generateVoice = functions().httpsCallable('generateVoiceTest');
+      console.log('Calling generateVoiceTest function...');
+      
+      const result = await generateVoice({ voice, text });
+      console.log('Voice test generation successful');
+      
+      if (!result.data?.url) {
+        throw new Error('No URL returned from voice test generation');
+      }
+      
+      return result.data.url;
+    } catch (error) {
+      console.error('Error testing voice:', {
+        error: error instanceof Error ? {
+          message: error.message,
+          name: error.name,
+          stack: error.stack
+        } : error,
+        params: {
+          voice,
+          textLength: text.length
+        }
+      });
+
+      // Handle specific error cases
+      if (error instanceof Error) {
+        if (error.message.includes('Authentication failed')) {
+          throw new Error('Voice service authentication failed. Please try again later.');
+        }
+        if (error.message.includes('busy')) {
+          throw new Error('Voice service is currently busy. Please try again in a few moments.');
+        }
+        // Pass through specific error messages from the cloud function
+        if (error.message.includes('Invalid voice option') || 
+            error.message.includes('Missing required parameters')) {
+          throw error;
+        }
+      }
+
+      throw new Error('Failed to test voice. Please try again later.');
+    }
+  }
+
+  async getCharacterVoices(scriptId: string): Promise<Record<string, CharacterVoiceSettings> | null> {
+    try {
+      const doc = await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .collection('settings')
+        .doc('voices')
+        .get();
+
+      if (!doc.exists) {
+        return null;
+      }
+
+      return doc.data() as Record<string, CharacterVoiceSettings>;
+    } catch (error) {
+      console.error('Error getting character voices:', error);
+      throw this.handleFirestoreError(error);
+    }
+  }
+
+  async saveCharacterVoices(
+    scriptId: string, 
+    voices: Record<string, CharacterVoiceSettings>
+  ): Promise<void> {
+    try {
+      await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .collection('settings')
+        .doc('voices')
+        .set(voices, { merge: true });
+    } catch (error) {
+      console.error('Error saving character voices:', error);
+      throw this.handleFirestoreError(error);
     }
   }
 }

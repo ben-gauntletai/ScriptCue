@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, FlatList, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
-import { Text, Button, Card, useTheme, IconButton, Menu, Divider, Portal, Dialog, Snackbar, FAB } from 'react-native-paper';
+import { Text, Button, Card, useTheme, IconButton, Menu, Divider, Portal, Dialog, Snackbar, FAB, TextInput } from 'react-native-paper';
 import firestore from '@react-native-firebase/firestore';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '../../contexts/AuthContext';
-import { MainNavigationProp } from '../../navigation/types';
+import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script } from '../../types/script';
 import firebaseService from '../../services/firebase';
+
+type ScriptsOverviewRouteProp = RouteProp<MainStackParamList, 'Scripts'>;
 
 const ScriptsOverview = () => {
   const [scripts, setScripts] = useState<Script[]>([]);
@@ -21,9 +23,28 @@ const ScriptsOverview = () => {
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarType, setSnackbarType] = useState<'success' | 'error'>('success');
   const [error, setError] = useState<string | null>(null);
+  const [renameDialogVisible, setRenameDialogVisible] = useState(false);
+  const [scriptToRename, setScriptToRename] = useState<Script | null>(null);
+  const [newScriptTitle, setNewScriptTitle] = useState('');
+
   const navigation = useNavigation<MainNavigationProp>();
+  const route = useRoute<ScriptsOverviewRouteProp>();
   const { user, signOut } = useAuth();
   const theme = useTheme();
+
+  useEffect(() => {
+    // Check for new script params
+    if (route.params?.newScriptId && route.params?.scriptTitle) {
+      const script = scripts.find(s => s.id === route.params.newScriptId);
+      if (script) {
+        setScriptToRename(script);
+        setNewScriptTitle(route.params.scriptTitle);
+        setRenameDialogVisible(true);
+        // Clear the params
+        navigation.setParams({ newScriptId: undefined, scriptTitle: undefined });
+      }
+    }
+  }, [route.params, scripts]);
 
   const loadScripts = useCallback(() => {
     if (!user) {
@@ -65,7 +86,7 @@ const ScriptsOverview = () => {
                 console.error('Error converting timestamps:', err);
               }
 
-              return {
+              const script = {
                 ...data,
                 id: doc.id,
                 createdAt,
@@ -77,6 +98,17 @@ const ScriptsOverview = () => {
                 characters: Array.isArray(data.characters) ? data.characters : [],
                 settings: Array.isArray(data.settings) ? data.settings : []
               } as Script;
+
+              // Check if script processing just completed
+              if (data.uploadStatus === 'completed' && 
+                  data.originalFileName && 
+                  data.title === data.originalFileName.replace('.pdf', '')) {
+                setScriptToRename(script);
+                setNewScriptTitle(data.title);
+                setRenameDialogVisible(true);
+              }
+
+              return script;
             });
 
             setScripts(scriptsData);
@@ -184,6 +216,33 @@ const ScriptsOverview = () => {
       setSnackbarMessage('Failed to log out. Please try again.');
       setSnackbarType('error');
       setSnackbarVisible(true);
+    }
+  };
+
+  const handleRenameScript = async () => {
+    if (!scriptToRename || !newScriptTitle.trim()) return;
+
+    try {
+      await firestore()
+        .collection('scripts')
+        .doc(scriptToRename.id)
+        .update({
+          title: newScriptTitle.trim(),
+          updatedAt: firestore.Timestamp.now()
+        });
+
+      setSnackbarMessage('Script renamed successfully');
+      setSnackbarType('success');
+      setSnackbarVisible(true);
+    } catch (error) {
+      console.error('Error renaming script:', error);
+      setSnackbarMessage('Failed to rename script');
+      setSnackbarType('error');
+      setSnackbarVisible(true);
+    } finally {
+      setRenameDialogVisible(false);
+      setScriptToRename(null);
+      setNewScriptTitle('');
     }
   };
 
@@ -363,6 +422,45 @@ const ScriptsOverview = () => {
               textColor={theme.colors.error}
             >
               Delete
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog 
+          visible={renameDialogVisible} 
+          onDismiss={() => {
+            setRenameDialogVisible(false);
+            setScriptToRename(null);
+            setNewScriptTitle('');
+          }}
+        >
+          <Dialog.Title>Name Your Script</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="Script Title"
+              value={newScriptTitle}
+              onChangeText={setNewScriptTitle}
+              mode="outlined"
+              autoFocus
+              style={{ marginTop: 8 }}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button 
+              onPress={() => {
+                setRenameDialogVisible(false);
+                setScriptToRename(null);
+                setNewScriptTitle('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onPress={handleRenameScript}
+              mode="contained"
+              disabled={!newScriptTitle.trim()}
+            >
+              Save
             </Button>
           </Dialog.Actions>
         </Dialog>

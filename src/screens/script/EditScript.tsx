@@ -4,12 +4,12 @@ import { Text, TextInput, Button, useTheme, HelperText, Portal, Dialog } from 'r
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
-import { NavigationProp, RootStackParamList } from '../../navigation/types';
+import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
 import { Script } from '../../types/script';
 import firebaseService from '../../services/firebase';
 import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 
-type EditScriptRouteProp = RouteProp<RootStackParamList, 'EditScript'>;
+type EditScriptRouteProp = RouteProp<MainStackParamList, 'EditScript'>;
 
 const EditScript = () => {
   const [script, setScript] = useState<Script | null>(null);
@@ -23,7 +23,7 @@ const EditScript = () => {
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
   const [duplicateScriptId, setDuplicateScriptId] = useState<string | null>(null);
 
-  const navigation = useNavigation<NavigationProp>();
+  const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<EditScriptRouteProp>();
   const { user } = useAuth();
   const theme = useTheme();
@@ -175,9 +175,8 @@ const EditScript = () => {
       <ScrollView 
         style={styles.container}
         keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.contentContainer}
       >
-        <Text variant="headlineMedium" style={styles.title}>Edit Script</Text>
-
         <View style={styles.form}>
           <TextInput
             label="Title"
@@ -207,38 +206,10 @@ const EditScript = () => {
             }}
             mode="outlined"
             multiline
-            numberOfLines={4}
-            style={styles.input}
+            numberOfLines={8}
+            style={[styles.input, styles.descriptionInput]}
             disabled={saving}
           />
-
-          <Text variant="bodyMedium" style={styles.label}>Status</Text>
-          <View style={styles.statusButtons}>
-            <Button
-              mode={status === 'draft' ? 'contained' : 'outlined'}
-              onPress={() => setStatus('draft')}
-              style={styles.statusButton}
-              disabled={saving}
-            >
-              Draft
-            </Button>
-            <Button
-              mode={status === 'in_progress' ? 'contained' : 'outlined'}
-              onPress={() => setStatus('in_progress')}
-              style={styles.statusButton}
-              disabled={saving}
-            >
-              In Progress
-            </Button>
-            <Button
-              mode={status === 'completed' ? 'contained' : 'outlined'}
-              onPress={() => setStatus('completed')}
-              style={styles.statusButton}
-              disabled={saving}
-            >
-              Completed
-            </Button>
-          </View>
 
           {error && (
             <Text style={[styles.errorText, { color: theme.colors.error }]}>
@@ -254,15 +225,6 @@ const EditScript = () => {
             style={styles.button}
           >
             Save Changes
-          </Button>
-
-          <Button
-            mode="outlined"
-            onPress={() => navigation.goBack()}
-            disabled={saving}
-            style={styles.button}
-          >
-            Cancel
           </Button>
         </View>
       </ScrollView>
@@ -289,7 +251,10 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    padding: 16,
+  },
+  contentContainer: {
+    flexGrow: 1,
+    padding: 24,
   },
   loadingContainer: {
     flex: 1,
@@ -301,27 +266,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  title: {
-    marginBottom: 24,
-  },
   form: {
+    flex: 1,
     gap: 16,
   },
   input: {
     backgroundColor: 'transparent',
   },
-  label: {
-    marginBottom: 8,
-  },
-  statusButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  statusButton: {
+  descriptionInput: {
     flex: 1,
+    minHeight: 120,
   },
   button: {
-    marginTop: 8,
+    marginTop: 24,
   },
   errorText: {
     marginTop: 8,

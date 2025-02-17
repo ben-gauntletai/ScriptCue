@@ -244,11 +244,20 @@ const mergeCharacters = (
     const key = char.name.toLowerCase();
     if (charMap.has(key)) {
       const existing = charMap.get(key);
+      // Merge dialogue arrays and remove duplicates based on lineNumber
+      const mergedDialogue = [...existing.dialogue, ...char.dialogue]
+        .sort((a, b) => a.lineNumber - b.lineNumber)
+        // Remove duplicates based on lineNumber
+        .filter((line, index, array) => 
+          index === 0 || line.lineNumber !== array[index - 1].lineNumber
+        );
+      
       charMap.set(key, {
         ...existing,
-        lines: existing.lines + char.lines,
+        // Count lines based on unique dialogue entries
+        lines: mergedDialogue.length,
         firstAppearance: Math.min(existing.firstAppearance, char.firstAppearance),
-        dialogue: [...existing.dialogue, ...char.dialogue].sort((a, b) => a.lineNumber - b.lineNumber),
+        dialogue: mergedDialogue,
       });
     } else {
       charMap.set(key, char);
@@ -279,7 +288,7 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
   } = {};
   const scenes: Scene[] = [];
   let currentScene = null as Scene | null;
-  let lineCount = 0;
+  let totalDialogueLines = 0;
   let currentCharacter: string | null = null;
 
   lines.forEach((line, index) => {
@@ -301,7 +310,6 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
           dialogue: [],
         };
       }
-      characters[characterName].lines++;
     } 
     // Dialogue detection - capture the line after a character name
     else if (currentCharacter && trimmedLine.length > 0 && 
@@ -313,6 +321,8 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
         text: trimmedLine,
         lineNumber: absoluteLineNumber,
       });
+      characters[currentCharacter].lines++;
+      totalDialogueLines++;
       currentCharacter = null; // Reset current character after capturing dialogue
     }
 
@@ -361,8 +371,6 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
       if (location) currentScene.location = location;
       if (timeOfDay) currentScene.timeOfDay = timeOfDay;
     }
-
-    lineCount++;
   });
 
   // Close the last scene if there is one
@@ -370,7 +378,7 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
     const finalScene: Scene = {
       name: currentScene.name,
       startLine: currentScene.startLine,
-      endLine: startLine + lineCount - 1,
+      endLine: startLine + lines.length - 1,
     };
     
     // Add optional fields only if they have values
@@ -388,15 +396,12 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
     dialogue: data.dialogue,
   }));
 
-  // Estimate duration (roughly 1 minute per page, assuming ~60 lines per page)
-  const estimatedDuration = Math.ceil(lineCount / 60);
-
   return {
     characters: characterArray,
     scenes: scenes.length > 0 ? scenes : [],
     metadata: {
-      totalLines: lineCount,
-      estimatedDuration,
+      totalLines: totalDialogueLines,
+      estimatedDuration: Math.ceil(totalDialogueLines / 60),
     },
   };
 };
@@ -507,6 +512,11 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
       totalLines: analysis.metadata.totalLines,
       estimatedDuration: analysis.metadata.estimatedDuration,
     });
+
+    // Calculate total lines by summing up all character lines
+    const totalDialogueLines = analysis.characters.reduce((sum, char) => sum + char.lines, 0);
+    analysis.metadata.totalLines = totalDialogueLines;
+    analysis.metadata.estimatedDuration = Math.ceil(totalDialogueLines / 60);
 
     await updateProcessingStatus(scriptId, "Saving results", 90);
     console.log(`[${scriptId}] Saving analysis results to Firestore`);

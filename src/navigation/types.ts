@@ -7,7 +7,10 @@ export type AuthStackParamList = {
 };
 
 export type MainStackParamList = {
-  Scripts: undefined;
+  Scripts: {
+    newScriptId?: string;
+    scriptTitle?: string;
+  } | undefined;
   NewScript: undefined;
   UploadScript: undefined;
   ScriptDetail: { scriptId: string };

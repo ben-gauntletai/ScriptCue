@@ -37,6 +37,8 @@ export interface ScriptScene {
   name: string;
   startLine: number;
   endLine: number;
+  location?: string;
+  timeOfDay?: string;
 }
 
 export interface ScriptSetting {
@@ -51,12 +53,42 @@ export interface VoiceSettings {
   speed: number;
 }
 
+export interface ScriptAnalysis {
+  characters: Array<{
+    name: string;
+    lines: number;
+    firstAppearance: number;
+  }>;
+  scenes: Array<{
+    name: string;
+    startLine: number;
+    endLine: number;
+    location?: string;
+    timeOfDay?: string;
+  }>;
+  metadata: {
+    totalLines: number;
+    estimatedDuration: number;
+    genre?: string;
+    tone?: string;
+  };
+}
+
+export interface ScriptProcessingStatus {
+  status: 'starting' | 'downloading' | 'parsing' | 'analyzing' | 'saving' | 'completed' | 'error';
+  progress?: number;
+  error?: string;
+  updatedAt: FirebaseFirestoreTypes.Timestamp;
+}
+
 export interface ScriptMetadata {
   id: string;
   title: string;
   characters: Record<string, ScriptCharacter>;
   totalLines: number;
   scenes: ScriptScene[];
+  analysis?: ScriptAnalysis;
+  processingStatus?: ScriptProcessingStatus;
 }
 
 export interface ScriptContextType {
@@ -86,14 +118,30 @@ export interface Script {
   scenes: ScriptScene[];
   characters: ScriptCharacter[];
   settings: ScriptSetting[];
+  analysis?: ScriptAnalysis;
+  processingStatus?: ScriptProcessingStatus;
 }
 
 export interface NewScriptData {
   title: string;
   description?: string | null;
   status?: 'draft' | 'in_progress' | 'completed';
-  scenes?: any[];
-  characters?: any[];
-  settings?: any[];
+  scenes?: ScriptScene[];
+  characters?: ScriptCharacter[];
+  settings?: ScriptSetting[];
   userId?: string;
+  id?: string;
+  uploadStatus?: 'uploading' | 'processing' | 'completed' | 'error';
+  uploadedAt?: FirebaseFirestoreTypes.Timestamp;
+  createdAt?: FirebaseFirestoreTypes.Timestamp;
+  updatedAt?: FirebaseFirestoreTypes.Timestamp;
+  fileUrl?: string;
+  originalFileName?: string;
+}
+
+export interface ProcessingStatus {
+  status: string;
+  progress?: number;
+  error?: string;
+  updatedAt: Date;
 } 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, FlatList, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
-import { Text, Button, Card, useTheme, IconButton, Menu, Divider, Portal, Dialog, Snackbar } from 'react-native-paper';
+import { Text, Button, Card, useTheme, IconButton, Menu, Divider, Portal, Dialog, Snackbar, FAB } from 'react-native-paper';
 import firestore from '@react-native-firebase/firestore';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { useAuth } from '../../contexts/AuthContext';
@@ -20,113 +20,101 @@ const ScriptsOverview = () => {
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarType, setSnackbarType] = useState<'success' | 'error'>('success');
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigation = useNavigation<MainNavigationProp>();
   const { user, signOut } = useAuth();
   const theme = useTheme();
 
-  useEffect(() => {
+  const loadScripts = useCallback(async () => {
     if (!user) {
       console.log('No authenticated user found in ScriptsOverview');
       setLoading(false);
+      setError('Please sign in to view your scripts');
       return;
     }
 
-    console.log('Setting up scripts listener for user:', user.uid, 'Email:', user.email);
-    let isFirstLoad = true;
+    try {
+      console.log('Loading scripts for user:', user.uid);
+      const scriptsSnapshot = await firestore()
+        .collection('scripts')
+        .where('userId', '==', user.uid)
+        .orderBy('updatedAt', 'desc')
+        .get();
 
-    // Set up real-time listener
-    const unsubscribe = firestore()
-      .collection('scripts')
-      .where('userId', '==', user.uid)
-      .orderBy('updatedAt', 'desc')
-      .onSnapshot(
-        snapshot => {
-          try {
-            console.log('Received scripts update, document count:', snapshot.docs.length);
-            const scriptsData = snapshot.docs.map(doc => {
-              const data = doc.data();
-              
-              // Convert timestamps
-              let createdAt = null;
-              let updatedAt = null;
+      console.log('Received scripts, document count:', scriptsSnapshot.docs.length);
+      const scriptsData = scriptsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        
+        // Convert timestamps
+        let createdAt = null;
+        let updatedAt = null;
 
-              try {
-                if (data.createdAt?.toDate) {
-                  createdAt = data.createdAt.toDate();
-                } else if (data.createdAt) {
-                  createdAt = new Date(data.createdAt);
-                }
-                
-                if (data.updatedAt?.toDate) {
-                  updatedAt = data.updatedAt.toDate();
-                } else if (data.updatedAt) {
-                  updatedAt = new Date(data.updatedAt);
-                }
-              } catch (err) {
-                console.error('Error converting timestamps:', err, data);
-              }
-
-              const scriptData = {
-                ...data,
-                id: doc.id,
-                createdAt,
-                updatedAt,
-                // Ensure all required fields have default values
-                title: data.title || 'Untitled',
-                description: data.description || null,
-                status: data.status || 'draft',
-                scenes: Array.isArray(data.scenes) ? data.scenes : [],
-                characters: Array.isArray(data.characters) ? data.characters : [],
-                settings: Array.isArray(data.settings) ? data.settings : []
-              } as Script;
-
-              return scriptData;
-            });
-            
-            setScripts(scriptsData);
-            
-            // Only set loading to false on first load
-            if (isFirstLoad) {
-              setLoading(false);
-              isFirstLoad = false;
-            }
-            
-            // Always clear refreshing state
-            setRefreshing(false);
-          } catch (err) {
-            console.error('Error processing scripts snapshot:', err);
-            setSnackbarMessage('Error processing scripts data');
-            setSnackbarType('error');
-            setSnackbarVisible(true);
-            setLoading(false);
-            setRefreshing(false);
+        try {
+          if (data.createdAt?.toDate) {
+            createdAt = data.createdAt.toDate();
+          } else if (data.createdAt) {
+            createdAt = new Date(data.createdAt);
           }
-        },
-        error => {
-          console.error('Error fetching scripts:', error);
-          setSnackbarMessage('Failed to load scripts');
-          setSnackbarType('error');
-          setSnackbarVisible(true);
-          setLoading(false);
-          setRefreshing(false);
+          
+          if (data.updatedAt?.toDate) {
+            updatedAt = data.updatedAt.toDate();
+          } else if (data.updatedAt) {
+            updatedAt = new Date(data.updatedAt);
+          }
+        } catch (err) {
+          console.error('Error converting timestamps:', err);
         }
-      );
 
-    // Clean up listener on unmount
-    return () => {
-      console.log('Cleaning up scripts listener for user:', user.uid);
-      unsubscribe();
-    };
+        return {
+          ...data,
+          id: doc.id,
+          createdAt,
+          updatedAt,
+          title: data.title || 'Untitled',
+          description: data.description || null,
+          status: data.status || 'draft',
+          scenes: Array.isArray(data.scenes) ? data.scenes : [],
+          characters: Array.isArray(data.characters) ? data.characters : [],
+          settings: Array.isArray(data.settings) ? data.settings : []
+        } as Script;
+      });
+
+      setScripts(scriptsData);
+      setError(null);
+    } catch (err) {
+      console.error('Error loading scripts:', err);
+      setError('Failed to load scripts. Please try again.');
+      setSnackbarMessage('Failed to load scripts');
+      setSnackbarType('error');
+      setSnackbarVisible(true);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [user]);
+
+  useEffect(() => {
+    loadScripts();
+  }, [loadScripts]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    // The real-time listener will automatically update the data
-    // and set refreshing to false
-  }, []);
+    loadScripts();
+  }, [loadScripts]);
 
-  const handleCreateNew = () => {
+  const handleCreateScript = () => {
+    setShowCreateDialog(true);
+  };
+
+  const handleNewScript = () => {
+    setShowCreateDialog(false);
     navigation.navigate('NewScript');
+  };
+
+  const handleUploadScript = () => {
+    setShowCreateDialog(false);
+    navigation.navigate('UploadScript');
   };
 
   const handleDeletePress = (script: Script) => {
@@ -193,7 +181,6 @@ const ScriptsOverview = () => {
   };
 
   const renderScript = ({ item }: { item: Script }) => {
-    // Safely format the date
     const formatDate = (date: Date | null | undefined) => {
       if (!date) return 'No date';
       try {
@@ -206,19 +193,34 @@ const ScriptsOverview = () => {
 
     return (
       <Card 
-        style={styles.card} 
+        style={[styles.card, { backgroundColor: theme.colors.elevation.level2 }]}
         onPress={() => navigation.navigate('ScriptDetail', { scriptId: item.id })}
         mode="elevated"
       >
         <Card.Content>
           <View style={styles.cardHeader}>
-            <Text variant="titleLarge" style={styles.title}>{item.title}</Text>
+            <View style={styles.cardTitleContainer}>
+              <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
+                {item.title}
+              </Text>
+              {item.analysis && (
+                <View style={styles.statsContainer}>
+                  <Text variant="bodySmall" style={styles.statsText}>
+                    {item.analysis.characters.length} Characters · {item.analysis.scenes.length} Scenes
+                  </Text>
+                  <Text variant="bodySmall" style={styles.statsText}>
+                    Duration: {Math.round(item.analysis.metadata.estimatedDuration)}min
+                  </Text>
+                </View>
+              )}
+            </View>
             <Menu
               visible={menuVisible === item.id}
               onDismiss={() => setMenuVisible(null)}
               anchor={
                 <IconButton
                   icon="dots-vertical"
+                  iconColor={theme.colors.onSurface}
                   onPress={() => setMenuVisible(item.id)}
                 />
               }
@@ -228,7 +230,6 @@ const ScriptsOverview = () => {
                 title="Edit" 
                 leadingIcon="pencil"
               />
-              <Divider />
               <Menu.Item 
                 onPress={() => handleDeletePress(item)}
                 title="Delete"
@@ -237,38 +238,73 @@ const ScriptsOverview = () => {
               />
             </Menu>
           </View>
-          {item.description && (
-            <Text variant="bodyMedium" numberOfLines={2} style={styles.description}>
-              {item.description}
-            </Text>
-          )}
-          <View style={styles.cardFooter}>
-            <Text variant="bodySmall" style={styles.date}>
-              Updated: {formatDate(item.updatedAt)}
-            </Text>
-            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
-              <Text style={styles.statusText}>{item.status}</Text>
+          {item.processingStatus && (
+            <View style={styles.processingContainer}>
+              <Text variant="bodySmall" style={styles.processingText}>
+                {item.processingStatus.status}
+                {item.processingStatus.progress !== undefined && 
+                  ` - ${Math.round(item.processingStatus.progress)}%`}
+              </Text>
+              {item.processingStatus.status.toLowerCase() !== 'completed' && (
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              )}
             </View>
-          </View>
+          )}
         </Card.Content>
       </Card>
     );
   };
 
-  if (!user) {
-    return null;
+  if (loading) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={{ marginTop: 16, color: theme.colors.onBackground }}>Loading your scripts...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
+  if (error) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Text style={{ color: theme.colors.error, marginBottom: 16, textAlign: 'center' }}>{error}</Text>
+          <Button mode="contained" onPress={loadScripts}>
+            Try Again
+          </Button>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const renderEmptyState = () => (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+      <Text style={{ color: theme.colors.onBackground, marginBottom: 16, textAlign: 'center' }}>
+        You don't have any scripts yet.
+      </Text>
+      <Button mode="contained" onPress={handleCreateScript}>
+        Create Your First Script
+      </Button>
+    </View>
+  );
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+      <View style={[styles.header, { borderBottomColor: theme.colors.surfaceVariant }]}>
         <View style={styles.headerLeft}>
-          <Text variant="headlineMedium" style={styles.headerTitle}>My Scripts</Text>
+          <Text 
+            variant="headlineMedium" 
+            style={[styles.headerTitle, { color: theme.colors.onBackground }]}
+          >
+            My Scripts
+          </Text>
         </View>
         <View style={styles.headerRight}>
           <Button
             mode="contained"
-            onPress={handleCreateNew}
+            onPress={handleCreateScript}
             icon="plus"
             disabled={loading}
             style={styles.newButton}
@@ -284,39 +320,24 @@ const ScriptsOverview = () => {
         </View>
       </View>
 
-      {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
-      ) : scripts.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text variant="bodyLarge" style={styles.emptyText}>
-            No scripts yet. Create your first script to get started!
-          </Text>
-          <Button
-            mode="contained"
-            onPress={handleCreateNew}
-            icon="plus"
-            style={styles.emptyButton}
-          >
-            Create Script
-          </Button>
-        </View>
-      ) : (
-        <FlatList
-          data={scripts}
-          renderItem={renderScript}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={[theme.colors.primary]}
-            />
-          }
-        />
-      )}
+      <FlatList
+        data={scripts}
+        renderItem={renderScript}
+        keyExtractor={(item) => item.id}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            colors={[theme.colors.primary]}
+            progressBackgroundColor={theme.colors.surface}
+          />
+        }
+        contentContainerStyle={[
+          styles.listContent,
+          scripts.length === 0 && styles.emptyListContent
+        ]}
+        ListEmptyComponent={renderEmptyState}
+      />
 
       <Portal>
         <Dialog visible={deleteDialogVisible} onDismiss={() => setDeleteDialogVisible(false)}>
@@ -340,6 +361,20 @@ const ScriptsOverview = () => {
         </Dialog>
       </Portal>
 
+      <Portal>
+        <Dialog visible={showCreateDialog} onDismiss={() => setShowCreateDialog(false)}>
+          <Dialog.Title>Create New Script</Dialog.Title>
+          <Dialog.Content>
+            <Text variant="bodyMedium">Choose how you want to create your script:</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowCreateDialog(false)}>Cancel</Button>
+            <Button onPress={handleNewScript}>Create Empty</Button>
+            <Button mode="contained" onPress={handleUploadScript}>Upload PDF</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
       <Snackbar
         visible={snackbarVisible}
         onDismiss={() => setSnackbarVisible(false)}
@@ -355,6 +390,12 @@ const ScriptsOverview = () => {
       >
         {snackbarMessage}
       </Snackbar>
+
+      <FAB
+        icon="plus"
+        style={styles.fab}
+        onPress={handleCreateScript}
+      />
     </SafeAreaView>
   );
 };
@@ -362,15 +403,6 @@ const ScriptsOverview = () => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#fff',
-  },
-  container: {
-    flex: 1,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   header: {
     flexDirection: 'row',
@@ -378,7 +410,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
   headerLeft: {
     flex: 1,
@@ -397,57 +428,54 @@ const styles = StyleSheet.create({
   listContent: {
     padding: 16,
   },
+  emptyListContent: {
+    flex: 1,
+  },
   card: {
     marginBottom: 16,
+    borderRadius: 12,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
-  title: {
+  cardTitleContainer: {
     flex: 1,
     marginRight: 8,
   },
-  description: {
-    marginTop: 8,
-    color: '#666',
+  title: {
+    marginBottom: 4,
   },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 16,
+  statsContainer: {
+    marginTop: 4,
   },
-  date: {
-    color: '#666',
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusText: {
-    color: '#fff',
+  statsText: {
+    opacity: 0.7,
     fontSize: 12,
-    textTransform: 'capitalize',
+    marginTop: 2,
   },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  processingContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
   },
-  emptyText: {
-    textAlign: 'center',
-    marginBottom: 16,
-    color: '#666',
-  },
-  emptyButton: {
-    minWidth: 200,
+  processingText: {
+    opacity: 0.7,
+    textTransform: 'capitalize',
   },
   snackbar: {
     marginBottom: 16,
+  },
+  fab: {
+    position: 'absolute',
+    margin: 16,
+    right: 0,
+    bottom: 0,
   },
 });
 

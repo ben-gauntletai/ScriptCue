@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useReducer, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useEffect, useState } from 'react';
 import { ScriptContextType, ScriptSession, DialogueLine, VoiceSettings, ScriptMetadata } from '../types/script';
 import firestore from '@react-native-firebase/firestore';
 import auth from '@react-native-firebase/auth';
+import firebaseService from '../services/firebase';
+import { ProcessingStatus } from '../types/script';
+import { useAuth } from './AuthContext';
 
 const initialState: ScriptContextType = {
   currentSession: null,
@@ -62,11 +65,11 @@ const scriptReducer = (state: ScriptContextType, action: Action): ScriptContextT
   }
 };
 
-const ScriptContext = createContext<ScriptContextType>(initialState);
+const ScriptContext = createContext<ScriptContextType | undefined>(undefined);
 
 export const useScript = () => {
   const context = useContext(ScriptContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useScript must be used within a ScriptProvider');
   }
   return context;
@@ -74,6 +77,10 @@ export const useScript = () => {
 
 export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(scriptReducer, initialState);
+  const [scripts, setScripts] = useState<ScriptMetadata[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
 
   const calculateLineDuration = (text: string): number => {
     // Basic duration calculation: 1 second per 15 characters
@@ -359,6 +366,48 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [state.currentSession, state.currentScript, state.lines, loadLines, updateSessionStats]);
 
+  const refreshScripts = async () => {
+    if (!user) {
+      setScripts([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const fetchedScripts = await firebaseService.getScripts();
+      setScripts(fetchedScripts);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Error fetching scripts:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getProcessingStatus = async (scriptId: string): Promise<ProcessingStatus | null> => {
+    try {
+      return await firebaseService.getProcessingStatus(scriptId);
+    } catch (err) {
+      console.error('Error fetching processing status:', err);
+      return null;
+    }
+  };
+
+  const subscribeToProcessingStatus = (
+    scriptId: string,
+    callback: (status: ProcessingStatus) => void
+  ): (() => void) => {
+    return firebaseService.subscribeToProcessingStatus(scriptId, callback);
+  };
+
+  useEffect(() => {
+    if (user) {
+      refreshScripts();
+    }
+  }, [user]);
+
   const value = {
     ...state,
     actions: {
@@ -368,6 +417,12 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       completeCurrentLine,
       updateVoiceSettings: async () => {}, // Implement if needed
     },
+    scripts,
+    loading,
+    error,
+    refreshScripts,
+    getProcessingStatus,
+    subscribeToProcessingStatus,
   };
 
   return <ScriptContext.Provider value={value}>{children}</ScriptContext.Provider>;

@@ -136,13 +136,12 @@ const App = () => {
       projectId: firebaseConfig.projectId,
       storageBucket: firebaseConfig.storageBucket,
       messagingSenderId: firebaseConfig.messagingSenderId,
-      // Don't log the full API key for security
     });
     try {
       // Initialize Firebase app first
       if (!firebase.apps.length) {
         console.log('Initializing Firebase app...');
-        firebase.initializeApp(firebaseConfig);
+        await firebase.initializeApp(firebaseConfig);
         console.log('Firebase app initialized successfully');
       } else {
         console.log('Firebase app already initialized');

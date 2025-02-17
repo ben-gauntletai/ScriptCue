@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,6 +12,7 @@ import { DialogueBubble } from '../../components/script/DialogueBubble';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { theme } from '../../theme';
 
 export const ScriptReaderScreen: React.FC = () => {
   const {
@@ -25,12 +26,19 @@ export const ScriptReaderScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const flatListRef = useRef<FlatList>(null);
+  const [autoProgress, setAutoProgress] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout>();
 
   // Extract params
   const { scriptId, character } = route.params as { scriptId: string; character: string };
 
   useEffect(() => {
     startSession(scriptId, character);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
   }, [scriptId, character, startSession]);
 
   useEffect(() => {
@@ -39,12 +47,27 @@ export const ScriptReaderScreen: React.FC = () => {
     }
   }, [lines]);
 
-  const handleOptionsPress = (lineId: string) => {
-    // TODO: Implement options menu (repeat line, adjust timing, etc.)
-    console.log('Options pressed for line:', lineId);
+  useEffect(() => {
+    if (autoProgress && currentSession?.status === 'active') {
+      const currentLine = lines[currentSession.currentLineIndex];
+      if (currentLine && currentLine.status === 'active') {
+        timerRef.current = setTimeout(() => {
+          completeCurrentLine();
+        }, currentLine.duration * 1000);
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, [autoProgress, currentSession?.status, currentSession?.currentLineIndex, lines, completeCurrentLine]);
+
+  const toggleAutoProgress = () => {
+    setAutoProgress(prev => !prev);
   };
 
-  const handlePauseResume = () => {
+  const handlePlayPause = () => {
     if (currentSession?.status === 'active') {
       pauseSession();
     } else {
@@ -52,10 +75,15 @@ export const ScriptReaderScreen: React.FC = () => {
     }
   };
 
+  const handleAddNote = () => {
+    // TODO: Implement note adding functionality
+    console.log('Add note for current line');
+  };
+
   if (isLoading && lines.length === 0) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={theme.colors.primary} />
       </View>
     );
   }
@@ -74,19 +102,16 @@ export const ScriptReaderScreen: React.FC = () => {
     );
   }
 
+  const stats = currentSession?.stats || { readerLines: 0, userLines: 0, totalDuration: 0 };
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'right', 'left']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Icon name="arrow-back" size={24} color="#000" />
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Icon name="close" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.title}>Script Reading</Text>
-        <TouchableOpacity onPress={handlePauseResume}>
-          <Icon
-            name={currentSession?.status === 'active' ? 'pause' : 'play-arrow'}
-            size={24}
-            color="#000"
-          />
+        <TouchableOpacity onPress={handleAddNote} style={styles.addButton}>
+          <Icon name="add" size={24} color={theme.colors.text} />
         </TouchableOpacity>
       </View>
       
@@ -94,25 +119,48 @@ export const ScriptReaderScreen: React.FC = () => {
         ref={flatListRef}
         data={lines}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <DialogueBubble
             line={item}
-            onOptionsPress={() => handleOptionsPress(item.id)}
+            lineNumber={index + 1}
+            isActive={currentSession?.currentLineIndex === index}
           />
         )}
         contentContainerStyle={styles.listContent}
       />
 
-      {currentSession?.status === 'active' && (
-        <View style={styles.footer}>
+      <SafeAreaView edges={['bottom']} style={styles.footer}>
+        <View style={styles.statsContainer}>
+          <Text style={styles.statsText}>{stats.readerLines} Reader Lines</Text>
+          <Text style={styles.statsText}>{stats.userLines} Myself Lines</Text>
+          <Text style={styles.statsText}>Scene Duration: {stats.totalDuration.toFixed(1)}s</Text>
+        </View>
+        <View style={styles.controlsContainer}>
           <TouchableOpacity
-            style={styles.completeButton}
-            onPress={completeCurrentLine}
+            style={styles.autoButton}
+            onPress={toggleAutoProgress}
           >
-            <Text style={styles.completeButtonText}>Complete Line</Text>
+            <Icon 
+              name={autoProgress ? "timer-off" : "timer"} 
+              size={24} 
+              color={autoProgress ? theme.colors.primary : theme.colors.text} 
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.playButton,
+              currentSession?.status === 'active' && styles.playButtonActive
+            ]}
+            onPress={handlePlayPause}
+          >
+            <Icon 
+              name={currentSession?.status === 'active' ? 'pause' : 'play-arrow'} 
+              size={32} 
+              color={theme.colors.onPrimary} 
+            />
           </TouchableOpacity>
         </View>
-      )}
+      </SafeAreaView>
     </SafeAreaView>
   );
 };
@@ -120,19 +168,19 @@ export const ScriptReaderScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.background,
   },
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
+  backButton: {
+    padding: 8,
+  },
+  addButton: {
+    padding: 8,
   },
   listContent: {
     paddingVertical: 16,
@@ -140,43 +188,64 @@ const styles = StyleSheet.create({
   footer: {
     padding: 16,
     borderTopWidth: 1,
-    borderTopColor: '#E5E5EA',
+    borderTopColor: theme.colors.surface,
   },
-  completeButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    padding: 16,
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  statsText: {
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+  },
+  controlsContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  completeButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+  autoButton: {
+    padding: 8,
+    position: 'absolute',
+    left: 0,
+  },
+  playButton: {
+    backgroundColor: theme.colors.primary,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playButtonActive: {
+    backgroundColor: theme.colors.error,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: theme.colors.background,
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
+    backgroundColor: theme.colors.background,
   },
   errorText: {
-    color: '#FF3B30',
+    color: theme.colors.error,
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 16,
   },
   retryButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: theme.colors.primary,
     borderRadius: 8,
     padding: 12,
   },
   retryText: {
-    color: '#FFFFFF',
+    color: theme.colors.onPrimary,
     fontSize: 16,
     fontWeight: '600',
   },

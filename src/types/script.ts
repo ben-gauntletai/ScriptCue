@@ -2,22 +2,27 @@ import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 
 export interface DialogueLine {
   id: string;
-  text: string;
   character: string;
+  text: string;
+  duration: number;
   timestamp: number;
-  isUser: boolean;
-  status: 'pending' | 'reading' | 'complete';
+  status: 'pending' | 'active' | 'completed';
 }
 
 export interface ScriptSession {
   id: string;
   scriptId: string;
-  userId: string;
-  currentLine: number;
-  userCharacter: string;
+  character: string;
   status: 'active' | 'paused' | 'completed';
-  startTime: FirebaseFirestoreTypes.Timestamp;
-  lastActiveTime: FirebaseFirestoreTypes.Timestamp;
+  startTime: number;
+  endTime?: number;
+  currentLineIndex: number;
+  lines: DialogueLine[];
+  stats: {
+    readerLines: number;
+    userLines: number;
+    totalDuration: number;
+  };
 }
 
 export interface ScriptCharacter {

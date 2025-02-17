@@ -1,4 +1,15 @@
-import { MD3LightTheme as DefaultTheme, MD3Theme } from 'react-native-paper';
+import { MD3DarkTheme, MD3LightTheme } from 'react-native-paper';
+import { DefaultTheme as NavigationDefaultTheme } from '@react-navigation/native';
+
+declare global {
+  namespace ReactNativePaper {
+    interface MD3Colors {
+      textSecondary: string;
+      onPrimary: string;
+      success: string;
+    }
+  }
+}
 
 export const colors = {
   primary: '#1B365D',
@@ -85,32 +96,24 @@ export const shadows = {
   },
 } as const;
 
-export const theme: MD3Theme = {
-  ...DefaultTheme,
+export const theme = {
+  ...MD3DarkTheme,
   colors: {
-    ...DefaultTheme.colors,
-    primary: colors.primary,
-    secondary: colors.secondary,
-    error: colors.error,
-    background: colors.background,
-    surface: colors.surface,
-    surfaceVariant: colors.surfaceVariant,
-    onSurface: colors.text,
-    onSurfaceVariant: colors.textSecondary,
-    outline: colors.border,
-    success: '#4CAF50',
+    ...MD3DarkTheme.colors,
+    primary: '#007AFF',
+    background: '#1C1C1E',
+    surface: '#2C2C2E',
+    text: '#FFFFFF',
+    textSecondary: '#8E8E93',
+    onPrimary: '#FFFFFF',
+    success: '#34C759',
   },
-  roundness: 12,
 };
 
 export const navigationTheme = {
-  dark: false,
+  ...NavigationDefaultTheme,
   colors: {
-    primary: colors.primary,
-    background: colors.background,
-    card: colors.surface,
-    text: colors.text,
-    border: colors.border,
-    notification: colors.error,
+    ...NavigationDefaultTheme.colors,
+    background: theme.colors.background,
   },
 }; 

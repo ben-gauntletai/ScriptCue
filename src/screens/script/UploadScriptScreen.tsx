@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,23 +8,20 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import storage, { FirebaseStorageTypes } from '@react-native-firebase/storage';
+import storage from '@react-native-firebase/storage';
+import firestore from '@react-native-firebase/firestore';
 import auth from '@react-native-firebase/auth';
 import DocumentPicker from 'react-native-document-picker';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../../navigation/types';
-
-type UploadScriptScreenNavigationProp = NativeStackNavigationProp<
-  RootStackParamList,
-  'UploadScript'
->;
+import { theme } from '../../theme';
 
 export const UploadScriptScreen: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const navigation = useNavigation<UploadScriptScreenNavigationProp>();
+  const [processingStatus, setProcessingStatus] = useState<'idle' | 'processing' | 'complete' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const navigation = useNavigation();
 
   const handleUpload = useCallback(async () => {
     try {
@@ -39,13 +36,24 @@ export const UploadScriptScreen: React.FC = () => {
       }
 
       setUploading(true);
+      setProcessingStatus('processing');
+      setError(null);
+
       const userId = auth().currentUser?.uid;
       if (!userId) {
         Alert.alert('Error', 'Please sign in to upload scripts');
         return;
       }
 
-      const fileName = `scripts/${userId}/${Date.now()}_${file.name}`;
+      // Create script document first
+      const scriptRef = await firestore().collection('scripts').add({
+        title: file.name,
+        uploadedBy: userId,
+        createdAt: firestore.FieldValue.serverTimestamp(),
+        status: 'processing',
+      });
+
+      const fileName = `scripts/${userId}/${scriptRef.id}_${file.name}`;
       const reference = storage().ref(fileName);
 
       // Upload file with metadata
@@ -54,40 +62,69 @@ export const UploadScriptScreen: React.FC = () => {
         customMetadata: {
           uploadedBy: userId,
           originalName: file.name,
+          scriptId: scriptRef.id,
         },
       });
 
       // Track upload progress
       task.on('state_changed', 
-        (snapshot: FirebaseStorageTypes.TaskSnapshot) => {
+        (snapshot) => {
           const currentProgress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
           setProgress(currentProgress);
         },
         (error) => {
           console.error('Upload error:', error);
-          Alert.alert('Error', 'Failed to upload script. Please try again.');
+          setError('Failed to upload script. Please try again.');
+          setProcessingStatus('error');
           setUploading(false);
           setProgress(0);
         }
       );
 
       await task;
-      Alert.alert(
-        'Success',
-        'Script uploaded successfully! It will be processed shortly.',
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.goBack(),
-          },
-        ]
-      );
+      
+      // Start monitoring processing status
+      const unsubscribe = firestore()
+        .collection('scripts')
+        .doc(scriptRef.id)
+        .onSnapshot((doc) => {
+          const data = doc.data();
+          if (data?.status === 'ready') {
+            setProcessingStatus('complete');
+            unsubscribe();
+            Alert.alert(
+              'Success',
+              'Script uploaded and processed successfully!',
+              [
+                {
+                  text: 'OK',
+                  onPress: () => navigation.goBack(),
+                },
+              ]
+            );
+          } else if (data?.status === 'error') {
+            setProcessingStatus('error');
+            setError(data.error || 'Failed to process script');
+            unsubscribe();
+          }
+        });
+
+      // Clean up listener after 5 minutes
+      setTimeout(() => {
+        unsubscribe();
+        if (processingStatus === 'processing') {
+          setProcessingStatus('error');
+          setError('Script processing timed out. Please try again.');
+        }
+      }, 5 * 60 * 1000);
+
     } catch (error) {
       if (DocumentPicker.isCancel(error)) {
         // User cancelled the picker
         return;
       }
-      Alert.alert('Error', 'Failed to upload script. Please try again.');
+      setError('Failed to upload script. Please try again.');
+      setProcessingStatus('error');
       console.error('Upload error:', error);
     } finally {
       setUploading(false);
@@ -95,11 +132,24 @@ export const UploadScriptScreen: React.FC = () => {
     }
   }, [navigation]);
 
+  const getStatusMessage = () => {
+    switch (processingStatus) {
+      case 'processing':
+        return 'Processing Script...';
+      case 'complete':
+        return 'Script Processed Successfully!';
+      case 'error':
+        return error || 'An error occurred';
+      default:
+        return 'Select PDF Script';
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Icon name="arrow-back" size={24} color="#000" />
+          <Icon name="close" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Upload Script</Text>
         <View style={styles.placeholder} />
@@ -108,15 +158,36 @@ export const UploadScriptScreen: React.FC = () => {
       <View style={styles.content}>
         {uploading ? (
           <View style={styles.uploadingContainer}>
-            <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.uploadingText}>Uploading Script...</Text>
-            <Text style={styles.progressText}>{Math.round(progress)}%</Text>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.uploadingText}>
+              {progress < 100 ? 'Uploading Script...' : getStatusMessage()}
+            </Text>
+            {progress < 100 && (
+              <Text style={styles.progressText}>{Math.round(progress)}%</Text>
+            )}
           </View>
         ) : (
-          <TouchableOpacity style={styles.uploadButton} onPress={handleUpload}>
-            <Icon name="upload-file" size={48} color="#007AFF" />
-            <Text style={styles.uploadText}>Select PDF Script</Text>
-            <Text style={styles.supportedText}>Supported format: PDF</Text>
+          <TouchableOpacity 
+            style={[
+              styles.uploadButton,
+              processingStatus === 'error' && styles.uploadButtonError
+            ]} 
+            onPress={handleUpload}
+          >
+            <Icon 
+              name={processingStatus === 'error' ? 'error' : 'upload-file'} 
+              size={48} 
+              color={processingStatus === 'error' ? theme.colors.error : theme.colors.primary} 
+            />
+            <Text style={[
+              styles.uploadText,
+              processingStatus === 'error' && styles.uploadTextError
+            ]}>
+              {getStatusMessage()}
+            </Text>
+            {processingStatus === 'idle' && (
+              <Text style={styles.supportedText}>Supported format: PDF</Text>
+            )}
           </TouchableOpacity>
         )}
       </View>
@@ -127,7 +198,7 @@ export const UploadScriptScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -135,11 +206,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: theme.colors.surface,
   },
   title: {
     fontSize: 18,
     fontWeight: '600',
+    color: theme.colors.text,
   },
   placeholder: {
     width: 24,
@@ -155,22 +227,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 20,
     borderWidth: 2,
-    borderColor: '#007AFF',
+    borderColor: theme.colors.primary,
     borderStyle: 'dashed',
     borderRadius: 12,
     width: '100%',
     aspectRatio: 1,
   },
+  uploadButtonError: {
+    borderColor: theme.colors.error,
+  },
   uploadText: {
     marginTop: 12,
     fontSize: 18,
     fontWeight: '600',
-    color: '#007AFF',
+    color: theme.colors.primary,
+  },
+  uploadTextError: {
+    color: theme.colors.error,
   },
   supportedText: {
     marginTop: 8,
     fontSize: 14,
-    color: '#666',
+    color: theme.colors.textSecondary,
   },
   uploadingContainer: {
     alignItems: 'center',
@@ -178,12 +256,12 @@ const styles = StyleSheet.create({
   uploadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#666',
+    color: theme.colors.textSecondary,
   },
   progressText: {
     marginTop: 8,
     fontSize: 24,
     fontWeight: '600',
-    color: '#007AFF',
+    color: theme.colors.primary,
   },
 }); 

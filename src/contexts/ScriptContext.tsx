@@ -25,6 +25,7 @@ type Action =
   | { type: 'SET_SESSION'; payload: ScriptSession }
   | { type: 'SET_SCRIPT'; payload: ScriptMetadata }
   | { type: 'UPDATE_LINES'; payload: DialogueLine[] }
+  | { type: 'UPDATE_LINE_STATUS'; payload: { lineId: string; status: DialogueLine['status'] } }
   | { type: 'UPDATE_VOICE_SETTINGS'; payload: { characterId: string; settings: VoiceSettings } };
 
 const scriptReducer = (state: ScriptContextType, action: Action): ScriptContextType => {
@@ -39,6 +40,15 @@ const scriptReducer = (state: ScriptContextType, action: Action): ScriptContextT
       return { ...state, currentScript: action.payload };
     case 'UPDATE_LINES':
       return { ...state, lines: action.payload };
+    case 'UPDATE_LINE_STATUS':
+      return {
+        ...state,
+        lines: state.lines.map(line =>
+          line.id === action.payload.lineId
+            ? { ...line, status: action.payload.status }
+            : line
+        ),
+      };
     case 'UPDATE_VOICE_SETTINGS':
       return {
         ...state,
@@ -65,11 +75,40 @@ export const useScript = () => {
 export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(scriptReducer, initialState);
 
+  const calculateLineDuration = (text: string): number => {
+    // Basic duration calculation: 1 second per 15 characters
+    const baseTime = text.length / 15;
+    // Add padding for very short lines
+    return Math.max(baseTime, 2.0);
+  };
+
+  const updateSessionStats = useCallback(async (sessionId: string) => {
+    const readerLines = state.lines.filter(l => l.character !== 'MYSELF' && l.status === 'completed').length;
+    const userLines = state.lines.filter(l => l.character === 'MYSELF' && l.status === 'completed').length;
+    const completedLines = state.lines.filter(l => l.status === 'completed');
+    const totalDuration = completedLines.reduce((sum, line) => sum + line.duration, 0);
+
+    const stats = {
+      readerLines,
+      userLines,
+      totalDuration,
+    };
+
+    await firestore()
+      .collection('readingSessions')
+      .doc(sessionId)
+      .update({
+        stats,
+        lastActiveTime: Date.now(),
+      });
+
+    return stats;
+  }, [state.lines]);
+
   const loadScript = useCallback(async (scriptId: string) => {
     try {
       dispatch({ type: 'SET_LOADING', payload: true });
 
-      // Load script metadata
       const scriptDoc = await firestore().collection('scripts').doc(scriptId).get();
       if (!scriptDoc.exists) {
         throw new Error('Script not found');
@@ -78,7 +117,6 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const scriptData = scriptDoc.data() as ScriptMetadata;
       dispatch({ type: 'SET_SCRIPT', payload: scriptData });
 
-      // Load user preferences
       const userId = auth().currentUser?.uid;
       if (userId) {
         const prefsDoc = await firestore()
@@ -121,8 +159,8 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           id: doc.id,
           text: data.text,
           character: data.characterId,
+          duration: calculateLineDuration(data.text),
           timestamp: Date.now(),
-          isUser: state.currentSession?.userCharacter === data.characterId,
           status: 'pending',
         };
       });
@@ -131,7 +169,7 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: 'Failed to load lines' });
     }
-  }, [state.currentSession?.userCharacter]);
+  }, []);
 
   const startSession = useCallback(async (scriptId: string, character: string) => {
     try {
@@ -139,40 +177,57 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       await loadScript(scriptId);
       
-      // Create new session in Firestore
       const userId = auth().currentUser?.uid;
       if (!userId) throw new Error('User not authenticated');
 
       const sessionRef = await firestore().collection('readingSessions').add({
         scriptId,
         userId,
-        userCharacter: character,
-        currentLine: 0,
+        character,
         status: 'active',
         startTime: Date.now(),
-        lastActiveTime: Date.now(),
-        progress: 0,
+        currentLineIndex: 0,
+        lines: [],
+        stats: {
+          readerLines: 0,
+          userLines: 0,
+          totalDuration: 0,
+        },
       });
 
       const session: ScriptSession = {
         id: sessionRef.id,
         scriptId,
-        currentLine: 0,
-        userCharacter: character,
+        character,
         status: 'active',
         startTime: Date.now(),
-        lastActiveTime: Date.now(),
+        currentLineIndex: 0,
+        lines: [],
+        stats: {
+          readerLines: 0,
+          userLines: 0,
+          totalDuration: 0,
+        },
       };
 
       dispatch({ type: 'SET_SESSION', payload: session });
       await loadLines(scriptId, 0);
+
+      // Set first line as active
+      if (state.lines.length > 0) {
+        dispatch({
+          type: 'UPDATE_LINE_STATUS',
+          payload: { lineId: state.lines[0].id, status: 'active' },
+        });
+      }
+
       dispatch({ type: 'SET_ERROR', payload: null });
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: 'Failed to start session' });
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, [loadScript, loadLines]);
+  }, [loadScript, loadLines, state.lines]);
 
   const pauseSession = useCallback(async () => {
     if (!state.currentSession) return;
@@ -193,7 +248,6 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         payload: {
           ...state.currentSession,
           status: 'paused',
-          lastActiveTime: Date.now(),
         },
       });
     } catch (error) {
@@ -222,7 +276,6 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         payload: {
           ...state.currentSession,
           status: 'active',
-          lastActiveTime: Date.now(),
         },
       });
     } catch (error) {
@@ -236,78 +289,75 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!state.currentSession || !state.currentScript) return;
     
     try {
-      dispatch({ type: 'SET_LOADING', payload: true });
+      const currentIndex = state.currentSession.currentLineIndex;
+      const currentLine = state.lines[currentIndex];
       
-      const nextLine = state.currentSession.currentLine + 1;
-      const progress = (nextLine / state.currentScript.totalLines) * 100;
-      
-      await firestore()
-        .collection('readingSessions')
-        .doc(state.currentSession.id)
-        .update({
-          currentLine: nextLine,
-          lastActiveTime: Date.now(),
-          progress,
-        });
+      if (!currentLine) return;
 
+      // Mark current line as completed
       dispatch({
-        type: 'SET_SESSION',
-        payload: {
-          ...state.currentSession,
-          currentLine: nextLine,
-          lastActiveTime: Date.now(),
-        },
+        type: 'UPDATE_LINE_STATUS',
+        payload: { lineId: currentLine.id, status: 'completed' },
       });
 
-      // Load more lines if needed
-      if (state.lines.length - nextLine < 5) {
-        await loadLines(state.currentSession.scriptId, nextLine);
+      // Update session stats
+      const stats = await updateSessionStats(state.currentSession.id);
+
+      // Move to next line
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < state.lines.length) {
+        // Mark next line as active
+        dispatch({
+          type: 'UPDATE_LINE_STATUS',
+          payload: { lineId: state.lines[nextIndex].id, status: 'active' },
+        });
+
+        // Update session
+        const updatedSession: ScriptSession = {
+          ...state.currentSession,
+          currentLineIndex: nextIndex,
+          stats,
+        };
+
+        await firestore()
+          .collection('readingSessions')
+          .doc(state.currentSession.id)
+          .update({
+            currentLineIndex: nextIndex,
+            stats,
+            lastActiveTime: Date.now(),
+          });
+
+        dispatch({ type: 'SET_SESSION', payload: updatedSession });
+
+        // Load more lines if needed
+        if (nextIndex + 5 >= state.lines.length) {
+          await loadLines(state.currentSession.scriptId, nextIndex + 1);
+        }
+      } else {
+        // End of script
+        const updatedSession: ScriptSession = {
+          ...state.currentSession,
+          status: 'completed',
+          endTime: Date.now(),
+          stats,
+        };
+
+        await firestore()
+          .collection('readingSessions')
+          .doc(state.currentSession.id)
+          .update({
+            status: 'completed',
+            endTime: Date.now(),
+            stats,
+          });
+
+        dispatch({ type: 'SET_SESSION', payload: updatedSession });
       }
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: 'Failed to complete line' });
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
     }
-  }, [state.currentSession, state.currentScript, state.lines.length, loadLines]);
-
-  const updateVoiceSettings = useCallback(async (characterId: string, settings: VoiceSettings) => {
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true });
-      
-      const userId = auth().currentUser?.uid;
-      if (!userId || !state.currentSession) return;
-
-      await firestore()
-        .collection('userScriptPreferences')
-        .doc(`${state.currentSession.scriptId}_${userId}`)
-        .set({
-          userId,
-          scriptId: state.currentSession.scriptId,
-          selectedCharacterId: state.currentSession.userCharacter,
-          voiceSettings: {
-            [characterId]: settings,
-          },
-        }, { merge: true });
-
-      dispatch({
-        type: 'UPDATE_VOICE_SETTINGS',
-        payload: { characterId, settings },
-      });
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to update voice settings' });
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
-    }
-  }, [state.currentSession]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (state.currentSession?.status === 'active') {
-        pauseSession();
-      }
-    };
-  }, [state.currentSession?.status, pauseSession]);
+  }, [state.currentSession, state.currentScript, state.lines, loadLines, updateSessionStats]);
 
   const value = {
     ...state,
@@ -316,7 +366,7 @@ export const ScriptProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       pauseSession,
       resumeSession,
       completeCurrentLine,
-      updateVoiceSettings,
+      updateVoiceSettings: async () => {}, // Implement if needed
     },
   };
 

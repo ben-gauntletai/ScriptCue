@@ -45,7 +45,6 @@ const ScriptsOverview = () => {
             console.log('Received scripts update, document count:', snapshot.docs.length);
             const scriptsData = snapshot.docs.map(doc => {
               const data = doc.data();
-              console.log('Raw script data:', data);
               
               // Convert timestamps
               let createdAt = null;
@@ -80,13 +79,6 @@ const ScriptsOverview = () => {
                 characters: Array.isArray(data.characters) ? data.characters : [],
                 settings: Array.isArray(data.settings) ? data.settings : []
               } as Script;
-
-              console.log('Processed script data:', { 
-                id: scriptData.id, 
-                title: scriptData.title, 
-                createdAt: scriptData.createdAt?.toISOString(), 
-                updatedAt: scriptData.updatedAt?.toISOString() 
-              });
 
               return scriptData;
             });

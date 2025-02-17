@@ -1,36 +1,60 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
 import { DialogueLine } from '../../types/script';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { theme } from '../../theme';
 
 interface DialogueBubbleProps {
   line: DialogueLine;
+  lineNumber: number;
   onOptionsPress?: () => void;
+  isActive?: boolean;
 }
 
-export const DialogueBubble: React.FC<DialogueBubbleProps> = ({ line, onOptionsPress }) => {
-  const isUser = line.isUser;
+export const DialogueBubble: React.FC<DialogueBubbleProps> = ({ 
+  line, 
+  lineNumber,
+  onOptionsPress,
+  isActive = false,
+}) => {
+  const isUser = line.character === 'MYSELF';
   const bubbleStyle = isUser ? styles.userBubble : styles.readerBubble;
   const textStyle = isUser ? styles.userText : styles.readerText;
-  const containerStyle = isUser ? styles.userContainer : styles.readerContainer;
 
-  const formatTimestamp = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}s`;
+  const getStatusColor = () => {
+    switch (line.status) {
+      case 'completed':
+        return theme.colors.success;
+      case 'active':
+        return theme.colors.primary;
+      default:
+        return theme.colors.textSecondary;
+    }
   };
 
   return (
-    <View style={containerStyle}>
-      <View style={styles.headerContainer}>
-        <Text style={styles.character}>{line.character}</Text>
-        <Text style={styles.timestamp}>{formatTimestamp(line.timestamp)}</Text>
+    <View style={[
+      styles.container,
+      isActive && styles.activeContainer
+    ]}>
+      <View style={styles.lineNumberContainer}>
+        <Text style={[
+          styles.lineNumber,
+          { color: getStatusColor() }
+        ]}>{lineNumber}</Text>
       </View>
-      <View style={[styles.bubble, bubbleStyle]}>
-        <Text style={[styles.text, textStyle]}>{line.text}</Text>
+      <View style={styles.contentContainer}>
+        <View style={[styles.bubble, bubbleStyle]}>
+          <View style={styles.headerContainer}>
+            <Text style={styles.character}>{line.character}</Text>
+            <Text style={styles.timing}>{line.duration.toFixed(1)}s</Text>
+          </View>
+          <Text style={[styles.text, textStyle]}>{line.text}</Text>
+        </View>
       </View>
       {onOptionsPress && (
         <TouchableOpacity style={styles.optionsButton} onPress={onOptionsPress}>
-          <Icon name="more-vert" size={20} color="#666" />
+          <Icon name="more-vert" size={20} color={theme.colors.text} />
         </TouchableOpacity>
       )}
     </View>
@@ -38,59 +62,69 @@ export const DialogueBubble: React.FC<DialogueBubbleProps> = ({ line, onOptionsP
 };
 
 const styles = StyleSheet.create({
-  userContainer: {
-    alignItems: 'flex-end',
+  container: {
+    flexDirection: 'row',
     marginVertical: 4,
-    marginHorizontal: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
   },
-  readerContainer: {
-    alignItems: 'flex-start',
-    marginVertical: 4,
+  activeContainer: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 8,
     marginHorizontal: 8,
+    paddingHorizontal: 8,
+  },
+  lineNumberContainer: {
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  lineNumber: {
+    fontSize: 12,
+    opacity: 0.7,
+  },
+  contentContainer: {
+    flex: 1,
   },
   headerContainer: {
     flexDirection: 'row',
-    marginBottom: 4,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 4,
+  },
+  bubble: {
+    borderRadius: 8,
+    padding: 12,
+  },
+  userBubble: {
+    backgroundColor: theme.colors.primary,
+  },
+  readerBubble: {
+    backgroundColor: theme.colors.surface,
   },
   character: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#666',
-    marginRight: 8,
-  },
-  timestamp: {
-    fontSize: 10,
-    color: '#999',
-  },
-  bubble: {
-    borderRadius: 16,
-    padding: 12,
-    maxWidth: '80%',
-  },
-  userBubble: {
-    backgroundColor: '#007AFF',
-    marginLeft: 48,
-  },
-  readerBubble: {
-    backgroundColor: '#E5E5EA',
-    marginRight: 48,
+    color: theme.colors.textSecondary,
   },
   text: {
-    fontSize: 16,
+    fontSize: 14,
     lineHeight: 20,
   },
   userText: {
-    color: '#FFFFFF',
+    color: theme.colors.onPrimary,
   },
   readerText: {
-    color: '#000000',
+    color: theme.colors.text,
+  },
+  timing: {
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+    opacity: 0.7,
   },
   optionsButton: {
-    position: 'absolute',
-    right: -24,
-    top: '50%',
-    marginTop: -12,
-    padding: 4,
+    padding: 8,
+    marginLeft: 8,
   },
 }); 

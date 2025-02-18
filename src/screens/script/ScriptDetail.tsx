@@ -201,6 +201,12 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   testButton: {
     marginLeft: 8,
   },
+  fab: {
+    position: 'absolute',
+    margin: 16,
+    right: 0,
+    bottom: 0,
+  },
 });
 
 const ScriptDetail: React.FC = () => {
@@ -228,7 +234,13 @@ const ScriptDetail: React.FC = () => {
   const { user } = useAuth();
   const theme = useTheme();
   const styles = createStyles(theme);
-  const { scriptId } = route.params;
+  const { scriptId, showCharacterSelect } = route.params;
+
+  useEffect(() => {
+    if (showCharacterSelect) {
+      setPracticeDialogVisible(true);
+    }
+  }, [showCharacterSelect]);
 
   useEffect(() => {
     let unsubscribe: () => void;
@@ -318,15 +330,17 @@ const ScriptDetail: React.FC = () => {
     }
   };
 
-  const handlePracticePress = () => {
-    if (selectedCharacter) {
-      navigation.navigate('PracticeScript', {
-        scriptId,
-        characterId: selectedCharacter,
-      });
-      setPracticeDialogVisible(false);
-      setSelectedCharacter(null);
-    }
+  const handleStartPractice = () => {
+    setPracticeDialogVisible(true);
+  };
+
+  const handleCharacterSelect = (character: string) => {
+    navigation.replace('PracticeScript', {
+      scriptId,
+      characterId: character,
+    });
+    setPracticeDialogVisible(false);
+    setSelectedCharacter(null);
   };
 
   const handleTestVoice = async (voice: VoiceOption) => {
@@ -564,6 +578,14 @@ const ScriptDetail: React.FC = () => {
         {renderAnalysis()}
       </ScrollView>
 
+      <FAB
+        icon="play"
+        label="Start Practice"
+        style={styles.fab}
+        onPress={handleStartPractice}
+        disabled={!script?.analysis?.characters?.length}
+      />
+
       <Portal>
         <Dialog visible={deleteDialogVisible} onDismiss={() => setDeleteDialogVisible(false)}>
           <Dialog.Title>Delete Script</Dialog.Title>
@@ -587,7 +609,7 @@ const ScriptDetail: React.FC = () => {
                 <Button
                   key={character.name}
                   mode={selectedCharacter === character.name ? "contained" : "outlined"}
-                  onPress={() => setSelectedCharacter(character.name)}
+                  onPress={() => handleCharacterSelect(character.name)}
                   style={styles.characterButton}
                 >
                   {character.name} ({character.lines} lines)
@@ -595,20 +617,6 @@ const ScriptDetail: React.FC = () => {
               ))}
             </View>
           </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => {
-              setPracticeDialogVisible(false);
-              setSelectedCharacter(null);
-            }}>
-              Cancel
-            </Button>
-            <Button 
-              onPress={handlePracticePress}
-              disabled={!selectedCharacter}
-            >
-              Start Practice
-            </Button>
-          </Dialog.Actions>
         </Dialog>
 
         <Dialog 

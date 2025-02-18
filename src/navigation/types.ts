@@ -13,13 +13,19 @@ export type MainStackParamList = {
   } | undefined;
   NewScript: undefined;
   UploadScript: undefined;
-  ScriptDetail: { scriptId: string };
-  CharacterSelection: { scriptId: string };
-  ScriptReader: { scriptId: string; character: string };
-  EditScript: { scriptId: string };
+  ScriptDetail: { 
+    scriptId: string;
+  };
+  ScriptReader: { 
+    scriptId: string; 
+    character: string;
+  };
+  EditScript: { 
+    scriptId: string;
+  };
   PracticeScript: { 
     scriptId: string;
-    characterId?: string;
+    characterId: string;
     startLine?: number;
   };
 };

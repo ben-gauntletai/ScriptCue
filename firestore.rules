@@ -33,6 +33,12 @@ service cloud.firestore {
 
     match /scripts/{scriptId} {
       allow read, write: if isAuthenticated();
+      
+      match /settings/{settingId} {
+        allow read, write: if isAuthenticated() 
+          && exists(/databases/$(database)/documents/scripts/$(scriptId))
+          && get(/databases/$(database)/documents/scripts/$(scriptId)).data.userId == request.auth.uid;
+      }
     }
 
     match /scriptProcessing/{scriptId} {

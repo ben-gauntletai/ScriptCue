@@ -20,7 +20,24 @@ interface DialogueItem {
 
 type VoiceOption = 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'onyx' | 'nova' | 'sage' | 'shimmer';
 
+interface VoiceInfo {
+  description: string;
+  gender: 'Male' | 'Female';
+}
+
 const VOICE_OPTIONS: VoiceOption[] = ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'];
+
+const VOICE_INFO: Record<VoiceOption, VoiceInfo> = {
+  alloy: { description: 'Warm, steady', gender: 'Male' },
+  ash: { description: 'Deep, authoritative', gender: 'Male' },
+  coral: { description: 'Bright, expressive', gender: 'Female' },
+  echo: { description: 'Smooth, refined', gender: 'Male' },
+  fable: { description: 'Soft, lyrical', gender: 'Male' },
+  onyx: { description: 'Bold, resonant', gender: 'Male' },
+  nova: { description: 'Youthful, energetic', gender: 'Female' },
+  sage: { description: 'Calm, wise', gender: 'Female' },
+  shimmer: { description: 'Airy, melodic', gender: 'Female' }
+};
 
 interface VoiceSettings {
   voice: VoiceOption;
@@ -176,9 +193,9 @@ const PracticeScript: React.FC = () => {
             // Load saved voice settings if they exist
             const savedVoices = await firebaseService.getCharacterVoices(scriptId);
             if (savedVoices) {
-              setCharacterVoices(savedVoices);
+              setCharacterVoices(savedVoices as Record<string, VoiceSettings>);
               if (savedVoices[character.name]) {
-                setSelectedVoice(savedVoices[character.name].voice);
+                setSelectedVoice(savedVoices[character.name].voice as VoiceOption);
                 setTestText(savedVoices[character.name].testText || character.dialogue?.[0]?.text || '');
               }
             }
@@ -404,7 +421,7 @@ const PracticeScript: React.FC = () => {
                   <View style={styles.voiceInfo}>
                     <Text style={styles.voiceName}>{voice}</Text>
                     <Text style={styles.voiceDescription}>
-                      {getVoiceDescription(voice)}
+                      {VOICE_INFO[voice].gender} | {getVoiceDescription(voice)}
                     </Text>
                   </View>
                   {testingVoice === voice ? (
@@ -441,18 +458,7 @@ const PracticeScript: React.FC = () => {
 };
 
 const getVoiceDescription = (voice: VoiceOption): string => {
-  const descriptions: Record<VoiceOption, string> = {
-    alloy: 'Neutral, balanced voice',
-    echo: 'Warm, natural voice',
-    fable: 'British, authoritative voice',
-    onyx: 'Deep, resonant voice',
-    nova: 'Energetic, youthful voice',
-    shimmer: 'Clear, bright voice',
-    ash: 'Soft, gentle voice',
-    coral: 'Expressive, dynamic voice',
-    sage: 'Mature, thoughtful voice'
-  };
-  return descriptions[voice];
+  return VOICE_INFO[voice].description;
 };
 
 export default PracticeScript; 

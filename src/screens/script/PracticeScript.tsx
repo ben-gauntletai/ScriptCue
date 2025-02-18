@@ -6,7 +6,6 @@ import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script, ScriptCharacter } from '../../types/script';
 import firebaseService from '../../services/firebase';
-import Sound from 'react-native-sound';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
 
@@ -106,43 +105,21 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  voiceSettingsButton: {
+  settingsButton: {
     marginRight: 8,
   },
-  voiceSettingsDialog: {
+  settingsDialog: {
     maxHeight: '80%',
   },
-  voiceOptionContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceVariant,
-  },
-  voiceInfo: {
-    flex: 1,
-    marginLeft: 8,
-  },
-  voiceName: {
-    textTransform: 'capitalize',
-  },
-  testButton: {
-    marginLeft: 8,
-  },
-  testingIndicator: {
-    marginLeft: 8,
-  },
-  scrollContent: {
-    paddingBottom: 16,
-  },
-  testTextInput: {
+  dialogueSubtext: {
     marginBottom: 16,
-  },
-  voiceDescription: {
-    fontSize: 12,
     color: theme.colors.onSurfaceVariant,
-    marginTop: 2,
+  },
+  characterList: {
+    gap: 8,
+  },
+  characterButton: {
+    marginBottom: 8,
   },
 });
 
@@ -152,13 +129,8 @@ const PracticeScript: React.FC = () => {
   const [dialogue, setDialogue] = useState<DialogueItem[]>([]);
   const [currentLineIndex, setCurrentLineIndex] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
-  const [voiceSettingsVisible, setVoiceSettingsVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedVoice, setSelectedVoice] = useState<VoiceOption>('alloy');
-  const [testingVoice, setTestingVoice] = useState<VoiceOption | null>(null);
-  const [voiceTestError, setVoiceTestError] = useState<string | null>(null);
-  const [sound, setSound] = useState<Sound | null>(null);
-  const [testText, setTestText] = useState<string>('');
   const [characterVoices, setCharacterVoices] = useState<Record<string, VoiceSettings>>({});
 
   const navigation = useNavigation<MainNavigationProp>();
@@ -185,19 +157,10 @@ const PracticeScript: React.FC = () => {
               gender: 'unknown'
             });
 
-            // Set initial test text from character's first line
-            if (character.dialogue && character.dialogue.length > 0) {
-              setTestText(character.dialogue[0].text);
-            }
-
             // Load saved voice settings if they exist
             const savedVoices = await firebaseService.getCharacterVoices(scriptId);
             if (savedVoices) {
               setCharacterVoices(savedVoices as Record<string, VoiceSettings>);
-              if (savedVoices[character.name]) {
-                setSelectedVoice(savedVoices[character.name].voice as VoiceOption);
-                setTestText(savedVoices[character.name].testText || character.dialogue?.[0]?.text || '');
-              }
             }
 
             // Organize dialogue in sequential order
@@ -237,24 +200,21 @@ const PracticeScript: React.FC = () => {
     loadScript();
   }, [scriptId, characterId]);
 
-  useEffect(() => {
-    // Enable playback in silence mode
-    Sound.setCategory('Playback');
-
-    return () => {
-      // Cleanup sound when component unmounts
-      if (sound) {
-        sound.release();
-      }
-    };
-  }, [sound]);
-
   const handleBack = () => {
     navigation.goBack();
   };
 
-  const handleVoiceSettings = () => {
-    setVoiceSettingsVisible(true);
+  const handleSettings = () => {
+    setSettingsVisible(true);
+  };
+
+  const handleCharacterChange = (newCharacterId: string) => {
+    // Navigate to the same screen with the new character
+    navigation.replace('PracticeScript', {
+      scriptId,
+      characterId: newCharacterId,
+    });
+    setSettingsVisible(false);
   };
 
   const handleStartRecording = () => {
@@ -265,65 +225,6 @@ const PracticeScript: React.FC = () => {
   const handleStopRecording = () => {
     setIsRecording(false);
     // TODO: Implement recording stop functionality
-  };
-
-  const handleTestVoice = async (voice: VoiceOption) => {
-    setTestingVoice(voice);
-    setVoiceTestError(null);
-    
-    if (sound) {
-      sound.release();
-      setSound(null);
-    }
-    
-    try {
-      const textToTest = testText || `This is a test of the ${voice} voice.`;
-      const audioUrl = await firebaseService.testVoice(voice, textToTest);
-      
-      const newSound = new Sound(audioUrl, '', (error: any) => {
-        if (error) {
-          console.error('Error loading sound:', error);
-          setVoiceTestError('Failed to load audio. Please try again.');
-          setTestingVoice(null);
-          return;
-        }
-        
-        newSound.play((success: boolean) => {
-          if (!success) {
-            console.error('Error playing sound');
-            setVoiceTestError('Failed to play audio. Please try again.');
-          }
-          setTestingVoice(null);
-        });
-      });
-      
-      setSound(newSound);
-    } catch (error) {
-      console.error('Error testing voice:', error);
-      setVoiceTestError('Failed to test voice. Please try again.');
-      setTestingVoice(null);
-    }
-  };
-
-  const handleSaveVoiceSettings = async () => {
-    if (!currentCharacter) return;
-    
-    try {
-      const updatedVoices = {
-        ...characterVoices,
-        [currentCharacter.name]: {
-          voice: selectedVoice,
-          testText: testText
-        }
-      };
-      
-      await firebaseService.saveCharacterVoices(scriptId, updatedVoices);
-      setCharacterVoices(updatedVoices);
-      setVoiceSettingsVisible(false);
-    } catch (error) {
-      console.error('Error saving voice settings:', error);
-      setVoiceTestError('Failed to save voice settings. Please try again.');
-    }
   };
 
   if (!script || !currentCharacter) {
@@ -344,8 +245,8 @@ const PracticeScript: React.FC = () => {
         <Text>Practicing as {currentCharacter.name}</Text>
         <IconButton 
           icon="cog" 
-          onPress={handleVoiceSettings}
-          style={styles.voiceSettingsButton}
+          onPress={handleSettings}
+          style={styles.settingsButton}
         />
       </View>
 
@@ -393,62 +294,31 @@ const PracticeScript: React.FC = () => {
         </Dialog>
 
         <Dialog 
-          visible={voiceSettingsVisible} 
-          onDismiss={() => setVoiceSettingsVisible(false)}
-          style={styles.voiceSettingsDialog}
+          visible={settingsVisible} 
+          onDismiss={() => setSettingsVisible(false)}
+          style={styles.settingsDialog}
         >
-          <Dialog.Title>Voice Settings for {currentCharacter?.name}</Dialog.Title>
-          <Dialog.ScrollArea>
-            <ScrollView contentContainerStyle={styles.scrollContent}>
-              <TextInput
-                label="Test Text"
-                value={testText}
-                onChangeText={setTestText}
-                mode="outlined"
-                multiline
-                numberOfLines={3}
-                style={styles.testTextInput}
-                placeholder="Enter text to test the voice with..."
-              />
-              
-              {VOICE_OPTIONS.map((voice) => (
-                <View key={voice} style={styles.voiceOptionContainer}>
-                  <RadioButton
-                    value={voice}
-                    status={selectedVoice === voice ? 'checked' : 'unchecked'}
-                    onPress={() => setSelectedVoice(voice)}
-                  />
-                  <View style={styles.voiceInfo}>
-                    <Text style={styles.voiceName}>{voice}</Text>
-                    <Text style={styles.voiceDescription}>
-                      {VOICE_INFO[voice].gender} | {getVoiceDescription(voice)}
-                    </Text>
-                  </View>
-                  {testingVoice === voice ? (
-                    <ActivityIndicator size="small" style={styles.testingIndicator} />
-                  ) : (
-                    <Button 
-                      mode="outlined"
-                      onPress={() => handleTestVoice(voice)}
-                      style={styles.testButton}
-                      disabled={!!testingVoice}
-                    >
-                      Test
-                    </Button>
-                  )}
-                </View>
+          <Dialog.Title>Change Character</Dialog.Title>
+          <Dialog.Content>
+            <Text variant="bodyMedium" style={styles.dialogueSubtext}>
+              Select the character you want to practice as. Other characters will be voiced by AI.
+            </Text>
+            <View style={styles.characterList}>
+              {script.analysis?.characters?.map((character) => (
+                <Button
+                  key={character.name}
+                  mode={currentCharacter.name === character.name ? "contained" : "outlined"}
+                  onPress={() => handleCharacterChange(character.name)}
+                  style={styles.characterButton}
+                >
+                  {character.name} ({character.lines} lines)
+                </Button>
               ))}
-              {voiceTestError && (
-                <Text style={{ color: theme.colors.error, marginTop: 8 }}>
-                  {voiceTestError}
-                </Text>
-              )}
-            </ScrollView>
-          </Dialog.ScrollArea>
+            </View>
+          </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setVoiceSettingsVisible(false)}>Cancel</Button>
-            <Button onPress={handleSaveVoiceSettings} mode="contained">
-              Save
+            <Button onPress={() => setSettingsVisible(false)}>
+              Close
             </Button>
           </Dialog.Actions>
         </Dialog>

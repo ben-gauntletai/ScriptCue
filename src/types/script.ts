@@ -130,6 +130,10 @@ export interface Script {
   settings: ScriptSetting[];
   analysis?: ScriptAnalysis;
   processingStatus?: ScriptProcessingStatus;
+  uploadStatus?: 'uploading' | 'processing' | 'completed' | 'error';
+  fileUrl?: string | null;
+  originalFileName?: string | null;
+  error?: string | null;
 }
 
 export interface NewScriptData {

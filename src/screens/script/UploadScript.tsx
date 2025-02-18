@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Platform, PermissionsAndroid } from 'react-native';
-import { Text, Button, useTheme, ProgressBar, Portal, Dialog, IconButton, TextInput } from 'react-native-paper';
+import { Text, Button, useTheme, ProgressBar, Portal, Dialog, IconButton, TextInput, ActivityIndicator } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { MainNavigationProp } from '../../navigation/types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -12,7 +12,6 @@ import DocumentPicker, {
 } from 'react-native-document-picker';
 import RNFS from 'react-native-fs';
 import firebaseService from '../../services/firebase';
-import { v4 as uuidv4 } from 'uuid';
 import firestore from '@react-native-firebase/firestore';
 
 // Add type definitions
@@ -23,6 +22,15 @@ interface ProcessingStatus {
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const UPLOAD_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const PROCESSING_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+
+// Generate a unique ID using timestamp and random number
+const generateUniqueId = () => {
+  const timestamp = Date.now().toString(36);
+  const randomStr = Math.random().toString(36).substring(2, 8);
+  return `${timestamp}-${randomStr}`;
+};
 
 const UploadScript: React.FC = () => {
   const [uploading, setUploading] = useState(false);
@@ -33,10 +41,27 @@ const UploadScript: React.FC = () => {
   const [renameDialogVisible, setRenameDialogVisible] = useState(false);
   const [scriptTitle, setScriptTitle] = useState('');
   const [completedScriptId, setCompletedScriptId] = useState<string | null>(null);
+  const [tempFilePath, setTempFilePath] = useState<string | null>(null);
 
   const navigation = useNavigation<MainNavigationProp>();
   const { user } = useAuth();
   const theme = useTheme();
+
+  // Cleanup temporary files on component unmount or error
+  useEffect(() => {
+    return () => {
+      if (tempFilePath) {
+        RNFS.exists(tempFilePath)
+          .then(exists => {
+            if (exists) {
+              RNFS.unlink(tempFilePath)
+                .catch(err => console.error('Error cleaning up temp file:', err));
+            }
+          })
+          .catch(err => console.error('Error checking temp file:', err));
+      }
+    };
+  }, [tempFilePath]);
 
   const validateFile = (file: DocumentPickerResponse): string | null => {
     console.log('Validating file:', {
@@ -66,17 +91,22 @@ const UploadScript: React.FC = () => {
     
     try {
       if (Platform.Version >= 33) {
-        // For Android 13 and above, we need photo and video permissions
-        const photoPermission = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
+        const permissions = [
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO
+        ];
+        
+        const results = await Promise.all(
+          permissions.map(permission => PermissionsAndroid.request(permission))
         );
-        return photoPermission === PermissionsAndroid.RESULTS.GRANTED;
+        
+        return results.every(result => result === PermissionsAndroid.RESULTS.GRANTED);
       } else {
-        // For older Android versions
-        const storagePermission = await PermissionsAndroid.request(
+        const result = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
         );
-        return storagePermission === PermissionsAndroid.RESULTS.GRANTED;
+        return result === PermissionsAndroid.RESULTS.GRANTED;
       }
     } catch (err) {
       console.error('Error requesting permissions:', err);
@@ -92,47 +122,153 @@ const UploadScript: React.FC = () => {
     });
     
     try {
-      // Use the fileCopyUri if available (this is the local copy created by DocumentPicker)
+      // Use the fileCopyUri if available and valid
       if (file.fileCopyUri) {
-        console.log('Using fileCopyUri:', file.fileCopyUri);
-        return file.fileCopyUri;
+        const exists = await RNFS.exists(file.fileCopyUri);
+        if (exists) {
+          console.log('Using existing fileCopyUri:', file.fileCopyUri);
+          setTempFilePath(file.fileCopyUri);
+          return file.fileCopyUri;
+        }
       }
 
-      // If no fileCopyUri, create our own copy
-      const tempFilePath = `${RNFS.CachesDirectoryPath}/${uuidv4()}.pdf`;
-      console.log('Creating new copy at:', tempFilePath);
+      // Create new copy
+      const newPath = `${RNFS.CachesDirectoryPath}/${generateUniqueId()}.pdf`;
+      console.log('Creating new copy at:', newPath);
 
       if (Platform.OS === 'android') {
-        // For Android, we need to handle content:// URIs
-        try {
-          const base64Data = await RNFS.readFile(file.uri, 'base64');
-          await RNFS.writeFile(tempFilePath, base64Data, 'base64');
-        } catch (error) {
-          console.error('Error copying file:', error);
-          throw new Error('Failed to create local copy of file');
-        }
+        const base64Data = await RNFS.readFile(file.uri, 'base64');
+        await RNFS.writeFile(newPath, base64Data, 'base64');
       } else {
-        // For iOS, direct copy should work
-        await RNFS.copyFile(file.uri, tempFilePath);
+        await RNFS.copyFile(file.uri, newPath);
       }
 
       // Verify the copy
-      const stats = await RNFS.stat(tempFilePath);
+      const stats = await RNFS.stat(newPath);
       if (!stats.size) {
         throw new Error('Created file is empty');
       }
 
-      console.log('Local copy created successfully at:', tempFilePath);
-      return tempFilePath;
+      setTempFilePath(newPath);
+      console.log('Local copy created successfully at:', newPath);
+      return newPath;
     } catch (error) {
       console.error('Error in createLocalCopy:', error);
       throw new Error('Failed to create local copy of file');
     }
   };
 
+  const handleUploadTimeout = (scriptId: string) => {
+    setError('Upload timed out. Please try again.');
+    setUploading(false);
+    setUploadProgress(0);
+    
+    // Update script status
+    firestore()
+      .collection('scripts')
+      .doc(scriptId)
+      .update({
+        uploadStatus: 'error',
+        error: 'Upload timed out',
+        updatedAt: firestore.Timestamp.now()
+      })
+      .catch(err => console.error('Error updating timeout status:', err));
+  };
+
+  const handleProcessingTimeout = (scriptId: string, unsubscribe: () => void) => {
+    unsubscribe();
+    setError('Script processing timed out. Please try again.');
+    setProcessingStatus('error');
+    setProcessingProgress(null);
+    
+    firestore()
+      .collection('scriptProcessing')
+      .doc(scriptId)
+      .update({
+        status: 'error',
+        error: 'Processing timed out',
+        updatedAt: firestore.Timestamp.now()
+      })
+      .catch(err => console.error('Error updating processing timeout status:', err));
+  };
+
+  const uploadFile = async (file: DocumentPickerResponse, localFilePath: string, scriptId: string) => {
+    if (!user?.uid) {
+      setError('You must be logged in to upload scripts');
+      return;
+    }
+
+    if (!file.name) {
+      setError('Invalid file name');
+      return;
+    }
+
+    const fileName = file.name; // Store in variable to satisfy TypeScript
+    setUploading(true);
+    setError(null);
+    
+    // Set upload timeout
+    const uploadTimeout = setTimeout(() => handleUploadTimeout(scriptId), UPLOAD_TIMEOUT);
+    
+    try {
+      const fileUrl = await firebaseService.uploadScript(
+        localFilePath,
+        fileName,
+        user.uid,
+        scriptId,
+        (progress: number) => {
+          console.log('Upload progress:', progress);
+          setUploadProgress(progress);
+        }
+      );
+
+      clearTimeout(uploadTimeout);
+
+      // Set processing timeout and listener
+      const processingTimeout = setTimeout(
+        () => handleProcessingTimeout(scriptId, unsubscribe),
+        PROCESSING_TIMEOUT
+      );
+
+      const unsubscribe = firebaseService.listenToScriptProcessingStatus(
+        scriptId,
+        (status: ProcessingStatus) => {
+          console.log('Processing status update:', status);
+          setProcessingStatus(status.status);
+          setProcessingProgress(status.progress || null);
+
+          if (status.status === 'completed') {
+            clearTimeout(processingTimeout);
+            unsubscribe();
+            setCompletedScriptId(scriptId);
+            setScriptTitle(fileName.replace('.pdf', ''));
+            setRenameDialogVisible(true);
+          } else if (status.status === 'error') {
+            clearTimeout(processingTimeout);
+            unsubscribe();
+            setError(status.error || 'An error occurred during processing');
+          }
+        },
+        (error: Error) => {
+          clearTimeout(processingTimeout);
+          console.error('Error listening to processing status:', error);
+          setError('Failed to monitor processing status');
+        }
+      );
+
+      return fileUrl;
+    } catch (err) {
+      clearTimeout(uploadTimeout);
+      console.error('Error uploading file:', err);
+      setError('Failed to upload file. Please try again.');
+      throw err;
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleFilePick = useCallback(async () => {
     try {
-      // Request permissions first
       const hasPermission = await requestStoragePermission();
       if (!hasPermission) {
         setError('Storage permission is required to select files');
@@ -152,33 +288,22 @@ const UploadScript: React.FC = () => {
       console.log('File pick result:', result);
       const file = result[0];
 
-      // Validate the file
       const validationError = validateFile(file);
       if (validationError) {
         setError(validationError);
         return;
       }
 
-      // Create local copy
       const localPath = await createLocalCopy(file);
       console.log('Local copy created at:', localPath);
 
-      // Create script document
-      const scriptId = uuidv4();
+      const scriptId = generateUniqueId();
 
       if (!user?.uid) {
         throw new Error('User not authenticated');
       }
 
-      // Start upload
       await uploadFile(file, localPath, scriptId);
-
-      // Clean up
-      try {
-        await RNFS.unlink(localPath);
-      } catch (cleanupError) {
-        console.error('Error cleaning up temp file:', cleanupError);
-      }
     } catch (err) {
       if (!isInProgress(err)) {
         console.error('Error picking document:', err);
@@ -187,99 +312,14 @@ const UploadScript: React.FC = () => {
     }
   }, [user]);
 
-  const uploadFile = async (file: DocumentPickerResponse, localFilePath: string, scriptId: string) => {
-    if (!user?.uid) {
-      setError('You must be logged in to upload scripts');
-      return;
-    }
-
-    if (!file.name) {
-      setError('Invalid file name');
-      return;
-    }
-
-    setUploading(true);
-    setError(null);
-    
-    try {
-      console.log('Starting file upload...', {
-        localFilePath,
-        fileName: file.name,
-        userId: user.uid,
-        scriptId
-      });
-
-      // Create initial script document
-      await firestore().collection('scripts').doc(scriptId).set({
-        userId: user.uid,
-        title: file.name?.replace('.pdf', '') || 'Untitled Script',
-        originalFileName: file.name || 'Untitled Script.pdf',
-        description: '',
-        uploadStatus: 'uploading',
-        createdAt: firestore.Timestamp.now(),
-        updatedAt: firestore.Timestamp.now(),
-      });
-
-      // Upload the file
-      const fileUrl = await firebaseService.uploadScript(
-        localFilePath,
-        file.name,
-        user.uid,
-        scriptId,
-        (progress: number) => {
-          console.log('Upload progress:', progress);
-          setUploadProgress(progress);
-        }
-      );
-
-      // Update the script document with the file URL
-      await firestore().collection('scripts').doc(scriptId).update({
-        fileUrl,
-        uploadStatus: 'processing',
-        updatedAt: firestore.Timestamp.now()
-      });
-
-      console.log('File uploaded successfully, setting up processing listener...');
-
-      return new Promise((resolve, reject) => {
-        const unsubscribe = firebaseService.listenToScriptProcessingStatus(
-          scriptId,
-          (status: ProcessingStatus) => {
-            console.log('Processing status update:', status);
-            setProcessingStatus(status.status);
-            setProcessingProgress(status.progress || null);
-
-            if (status.status === 'completed') {
-              console.log('Processing completed, navigating back...');
-              unsubscribe();
-              navigation.replace('Scripts', {
-                newScriptId: scriptId,
-                scriptTitle: file.name?.replace('.pdf', '') || 'Untitled Script'
-              });
-              resolve(true);
-            } else if (status.status === 'error') {
-              console.error('Processing error:', status.error);
-              const errorMessage = status.error || 'An error occurred during processing';
-              setError(errorMessage);
-              unsubscribe();
-              reject(new Error(errorMessage));
-            }
-          },
-          (error: Error) => {
-            console.error('Error listening to processing status:', error);
-            setError('Failed to monitor processing status');
-            unsubscribe();
-            reject(error);
-          }
-        );
-      });
-    } catch (err) {
-      console.error('Error uploading file:', err);
-      setError('Failed to upload file. Please try again.');
-      throw err;
-    } finally {
-      setUploading(false);
-    }
+  const resetStates = () => {
+    setRenameDialogVisible(false);
+    setScriptTitle('');
+    setCompletedScriptId(null);
+    setProcessingStatus(null);
+    setProcessingProgress(null);
+    setUploadProgress(0);
+    setUploading(false);
   };
 
   const handleRenameScript = async () => {
@@ -294,12 +334,28 @@ const UploadScript: React.FC = () => {
           updatedAt: firestore.Timestamp.now()
         });
 
-      navigation.replace('ScriptDetail', { scriptId: completedScriptId });
+      const scriptId = completedScriptId; // Store ID before reset
+      resetStates();
+      navigation.replace('ScriptDetail', { scriptId });
     } catch (error) {
       console.error('Error renaming script:', error);
       setError('Failed to rename script');
     }
   };
+
+  const handleSkipRename = () => {
+    if (!completedScriptId) return;
+    const scriptId = completedScriptId; // Store ID before reset
+    resetStates();
+    navigation.replace('ScriptDetail', { scriptId });
+  };
+
+  // Add cleanup on unmount
+  useEffect(() => {
+    return () => {
+      resetStates();
+    };
+  }, []);
 
   const styles = StyleSheet.create({
     container: {
@@ -324,10 +380,6 @@ const UploadScript: React.FC = () => {
       padding: 16,
       gap: 16,
     },
-    title: {
-      marginBottom: 24,
-      textAlign: 'center',
-    },
     progressContainer: {
       width: '100%',
       marginTop: 24,
@@ -335,18 +387,37 @@ const UploadScript: React.FC = () => {
     progressBar: {
       height: 8,
       borderRadius: 4,
+      marginVertical: 8,
     },
     progressText: {
       marginTop: 8,
       textAlign: 'center',
+      color: theme.colors.onSurfaceVariant,
     },
     statusText: {
-      marginTop: 16,
+      marginBottom: 16,
       textAlign: 'center',
+      color: theme.colors.onSurface,
     },
     infoText: {
       textAlign: 'center',
       marginTop: 8,
+      color: theme.colors.onSurfaceVariant,
+    },
+    errorText: {
+      color: theme.colors.error,
+    },
+    retryButton: {
+      marginLeft: 8,
+    },
+    loader: {
+      marginTop: 16,
+    },
+    titleInput: {
+      marginTop: 8,
+    },
+    dialogueSubtext: {
+      marginBottom: 16,
       color: theme.colors.onSurfaceVariant,
     },
   });
@@ -371,6 +442,7 @@ const UploadScript: React.FC = () => {
               onPress={handleFilePick}
               icon="file-upload"
               loading={uploading}
+              disabled={uploading || !!processingStatus}
             >
               Select PDF File
             </Button>
@@ -384,13 +456,16 @@ const UploadScript: React.FC = () => {
           <View style={styles.progressContainer}>
             {uploading && (
               <>
+                <Text variant="titleMedium" style={styles.statusText}>
+                  Uploading Script...
+                </Text>
                 <ProgressBar
                   progress={uploadProgress / 100}
                   color={theme.colors.primary}
                   style={styles.progressBar}
                 />
                 <Text variant="bodyMedium" style={styles.progressText}>
-                  Uploading: {Math.round(uploadProgress)}%
+                  {Math.round(uploadProgress)}%
                 </Text>
               </>
             )}
@@ -398,7 +473,10 @@ const UploadScript: React.FC = () => {
             {processingStatus && (
               <>
                 <Text variant="titleMedium" style={styles.statusText}>
-                  {processingStatus.charAt(0).toUpperCase() + processingStatus.slice(1)}
+                  {processingStatus === 'starting' ? 'Preparing Script...' :
+                   processingStatus === 'processing' ? 'Analyzing Script...' :
+                   processingStatus === 'completed' ? 'Script Ready!' :
+                   processingStatus.charAt(0).toUpperCase() + processingStatus.slice(1)}
                 </Text>
                 {processingProgress !== null && (
                   <>
@@ -408,9 +486,12 @@ const UploadScript: React.FC = () => {
                       style={styles.progressBar}
                     />
                     <Text variant="bodyMedium" style={styles.progressText}>
-                      Progress: {Math.round(processingProgress)}%
+                      {Math.round(processingProgress)}%
                     </Text>
                   </>
+                )}
+                {processingStatus === 'processing' && processingProgress === null && (
+                  <ActivityIndicator size="large" color={theme.colors.primary} style={styles.loader} />
                 )}
               </>
             )}
@@ -422,38 +503,42 @@ const UploadScript: React.FC = () => {
         <Dialog visible={!!error} onDismiss={() => setError(null)}>
           <Dialog.Title>Error</Dialog.Title>
           <Dialog.Content>
-            <Text>{error}</Text>
+            <Text variant="bodyMedium" style={styles.errorText}>{error}</Text>
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setError(null)}>OK</Button>
+            {error?.includes('timed out') && (
+              <Button 
+                mode="contained" 
+                onPress={handleFilePick}
+                style={styles.retryButton}
+              >
+                Retry
+              </Button>
+            )}
           </Dialog.Actions>
         </Dialog>
 
         <Dialog 
           visible={renameDialogVisible} 
-          onDismiss={() => {
-            setRenameDialogVisible(false);
-            navigation.replace('ScriptDetail', { scriptId: completedScriptId! });
-          }}
+          onDismiss={handleSkipRename}
         >
           <Dialog.Title>Name Your Script</Dialog.Title>
           <Dialog.Content>
+            <Text variant="bodyMedium" style={styles.dialogueSubtext}>
+              Choose a name for your script to help you identify it later.
+            </Text>
             <TextInput
               label="Script Title"
               value={scriptTitle}
               onChangeText={setScriptTitle}
               mode="outlined"
               autoFocus
-              style={{ marginTop: 8 }}
+              style={styles.titleInput}
             />
           </Dialog.Content>
           <Dialog.Actions>
-            <Button 
-              onPress={() => {
-                setRenameDialogVisible(false);
-                navigation.replace('ScriptDetail', { scriptId: completedScriptId! });
-              }}
-            >
+            <Button onPress={handleSkipRename}>
               Skip
             </Button>
             <Button

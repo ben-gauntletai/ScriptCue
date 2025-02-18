@@ -5,6 +5,7 @@ import storage from '@react-native-firebase/storage';
 import { Platform } from 'react-native';
 import { NewScriptData, Script, ScriptProcessingStatus, ProcessingStatus } from '../types/script';
 import functions from '@react-native-firebase/functions';
+import RNFS from 'react-native-fs';
 
 interface CharacterVoiceSettings {
   voice: string;
@@ -383,6 +384,12 @@ class FirebaseService {
       console.log('Setting up upload with metadata:', metadata);
 
       try {
+        // Check if file exists and is readable
+        const stats = await RNFS.stat(filePath);
+        if (!stats.size) {
+          throw new Error('File is empty');
+        }
+
         // Upload the file
         console.log('Starting file upload...');
         uploadTask = reference.putFile(filePath, metadata);
@@ -466,13 +473,17 @@ class FirebaseService {
     } finally {
       // Clean up the progress listener if it exists
       if (progressUnsubscribe) {
-        progressUnsubscribe();
+        try {
+          progressUnsubscribe();
+        } catch (cleanupError) {
+          console.error('Error cleaning up progress listener:', cleanupError);
+        }
       }
       
-      // Ensure the upload task is properly cleaned up
-      if (uploadTask) {
+      // Clean up the upload task if it exists
+      if (uploadTask && typeof uploadTask.cancel === 'function') {
         try {
-          uploadTask._reset();
+          uploadTask.cancel();
         } catch (cleanupError) {
           console.error('Error cleaning up upload task:', cleanupError);
         }

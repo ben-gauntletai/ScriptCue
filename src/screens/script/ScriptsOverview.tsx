@@ -34,23 +34,15 @@ const ScriptsOverview = () => {
 
   useEffect(() => {
     // Check for new script params
-    if (route.params?.newScriptId && route.params?.scriptTitle) {
-      const script = scripts.find(s => s.id === route.params.newScriptId);
-      if (script) {
-        setScriptToRename(script);
-        setNewScriptTitle(route.params.scriptTitle);
-        setRenameDialogVisible(true);
-        // Clear the params
-        navigation.setParams({ newScriptId: undefined, scriptTitle: undefined });
-      }
+    if (route.params?.newScriptId) {
+      // Clear the params without showing rename dialog
+      navigation.setParams({ newScriptId: undefined, scriptTitle: undefined });
     }
   }, [route.params, scripts]);
 
   const loadScripts = useCallback(() => {
     if (!user) {
-      console.log('No authenticated user found in ScriptsOverview');
       setLoading(false);
-      setError('Please sign in to view your scripts');
       return () => {};
     }
 
@@ -65,48 +57,22 @@ const ScriptsOverview = () => {
             console.log('Received real-time update, document count:', snapshot.docs.length);
             const scriptsData = snapshot.docs.map(doc => {
               const data = doc.data();
-              
-              // Convert timestamps
-              let createdAt = null;
-              let updatedAt = null;
-
-              try {
-                if (data.createdAt?.toDate) {
-                  createdAt = data.createdAt.toDate();
-                } else if (data.createdAt) {
-                  createdAt = new Date(data.createdAt);
-                }
-                
-                if (data.updatedAt?.toDate) {
-                  updatedAt = data.updatedAt.toDate();
-                } else if (data.updatedAt) {
-                  updatedAt = new Date(data.updatedAt);
-                }
-              } catch (err) {
-                console.error('Error converting timestamps:', err);
-              }
-
-              const script = {
-                ...data,
+              const script: Script = {
                 id: doc.id,
-                createdAt,
-                updatedAt,
-                title: data.title || 'Untitled',
+                title: data.title || '',
                 description: data.description || null,
                 status: data.status || 'draft',
-                scenes: Array.isArray(data.scenes) ? data.scenes : [],
-                characters: Array.isArray(data.characters) ? data.characters : [],
-                settings: Array.isArray(data.settings) ? data.settings : []
-              } as Script;
-
-              // Check if script processing just completed
-              if (data.uploadStatus === 'completed' && 
-                  data.originalFileName && 
-                  data.title === data.originalFileName.replace('.pdf', '')) {
-                setScriptToRename(script);
-                setNewScriptTitle(data.title);
-                setRenameDialogVisible(true);
-              }
+                scenes: data.scenes || [],
+                characters: data.characters || [],
+                settings: data.settings || [],
+                createdAt: data.createdAt?.toDate() || null,
+                updatedAt: data.updatedAt?.toDate() || null,
+                uploadStatus: data.uploadStatus || null,
+                fileUrl: data.fileUrl || null,
+                originalFileName: data.originalFileName || null,
+                analysis: data.analysis || null,
+                error: data.error || null,
+              };
 
               return script;
             });

@@ -2,7 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList, AuthStackParamList, AppStackParamList } from './types';
 import { HomeScreen } from '../screens/HomeScreen';
-import { UploadScriptScreen } from '../screens/script/UploadScriptScreen';
+import UploadScript from '../screens/script/UploadScript';
 import { CharacterSelectionScreen } from '../screens/script/CharacterSelectionScreen';
 import { ScriptReaderScreen } from '../screens/script/ScriptReaderScreen';
 import { SignInScreen } from '../screens/auth/SignInScreen';
@@ -35,7 +35,7 @@ const AppNavigator = () => {
       }}
     >
       <AppStack.Screen name="Home" component={HomeScreen} />
-      <AppStack.Screen name="UploadScript" component={UploadScriptScreen} />
+      <AppStack.Screen name="UploadScript" component={UploadScript} />
       <AppStack.Screen name="CharacterSelection" component={CharacterSelectionScreen} />
       <AppStack.Screen name="ScriptReader" component={ScriptReaderScreen} />
     </AppStack.Navigator>

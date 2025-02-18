@@ -17,7 +17,6 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ScriptsOverview, NewScript, ScriptDetail, EditScript } from './src/screens';
 import { SignInScreen } from './src/screens/auth/SignInScreen';
 import { SignUpScreen } from './src/screens/auth/SignUpScreen';
-import { UploadScriptScreen } from './src/screens/script/UploadScriptScreen';
 import { CharacterSelectionScreen } from './src/screens/script/CharacterSelectionScreen';
 import { ScriptReaderScreen } from './src/screens/script/ScriptReaderScreen';
 import PracticeScript from './src/screens/script/PracticeScript';
@@ -33,6 +32,7 @@ import {
   FIREBASE_APP_ID,
 } from '@env';
 import firestore from '@react-native-firebase/firestore';
+import UploadScript from './src/screens/script/UploadScript';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -77,8 +77,8 @@ const MainNavigator = () => (
     />
     <MainStack.Screen 
       name="UploadScript" 
-      component={UploadScriptScreen}
-      options={{ title: 'Upload Script' }}
+      component={UploadScript}
+      options={{ headerShown: false }}
     />
     <MainStack.Screen 
       name="ScriptDetail" 

@@ -91,3 +91,4 @@ android/app/src/main/assets/fonts/Zocial.ttf
 .env
 database.md
 android/google-services.json
+functions/firebase-debug.log

@@ -43,159 +43,22 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.surfaceVariant,
   },
   titleContainer: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    marginRight: 16,
   },
   title: {
-    flex: 1,
-    color: theme.colors.onBackground,
-  },
-  content: {
-    flex: 1,
-    padding: 16,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    marginBottom: 8,
-    color: theme.colors.onBackground,
-  },
-  description: {
-    color: theme.colors.onSurfaceVariant,
-  },
-  listItem: {
-    padding: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.surfaceVariant,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  processingStatus: {
-    padding: 12,
-    backgroundColor: theme.colors.surfaceVariant,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  progressBar: {
-    flex: 1,
-    height: 8,
-    borderRadius: 4,
-  },
-  analysisContainer: {
-    gap: 16,
-  },
-  metadataRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 16,
-    marginTop: 8,
-  },
-  metadataItem: {
-    minWidth: 100,
-    backgroundColor: theme.colors.surfaceVariant,
-    padding: 12,
-    borderRadius: 8,
-  },
-  characterAnalysis: {
-    marginTop: 16,
-  },
-  subsectionTitle: {
-    marginBottom: 8,
-  },
-  characterRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.surfaceVariant,
-  },
-  dialogInput: {
-    marginBottom: 16,
-  },
-  genderSelector: {
-    marginTop: 16,
-    gap: 8,
-  },
-  genderButton: {
-    marginTop: 8,
-  },
-  metaSection: {
-    opacity: 0.7,
-  },
-  metaInfo: {
-    gap: 4,
-  },
-  metaText: {
-    fontSize: 12,
-    color: theme.colors.onSurfaceVariant,
-  },
-  contentCard: {
-    marginTop: 8,
-  },
-  contentScroll: {
-  },
-  contentText: {
-    fontFamily: 'monospace',
-    fontSize: 14,
-    lineHeight: 20,
-    padding: 8,
-  },
-  dialogueContainer: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.surfaceVariant,
-  },
-  dialogueHeader: {
-    color: theme.colors.onSurfaceVariant,
-    marginBottom: 4,
-  },
-  dialogueLine: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginVertical: 2,
-  },
-  lineNumber: {
-    minWidth: 60,
-    color: theme.colors.onSurfaceVariant,
-  },
-  dialogueText: {
-    flex: 1,
     color: theme.colors.onSurface,
+    fontWeight: '600',
   },
   headerActions: {
     flexDirection: 'row',
@@ -205,18 +68,112 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   practiceButton: {
     marginRight: 8,
   },
-  dialogueSubtext: {
+  content: {
+    flex: 1,
+  },
+  section: {
+    padding: 16,
+    backgroundColor: theme.colors.surface,
+    marginBottom: 12,
+    borderRadius: 12,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+  },
+  sectionTitle: {
+    color: theme.colors.primary,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  description: {
     color: theme.colors.onSurfaceVariant,
+    lineHeight: 22,
+  },
+  analysisContainer: {
+    gap: 16,
+  },
+  metadataRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+    marginBottom: 8,
+  },
+  metadataItem: {
+    flex: 1,
+    minWidth: 120,
+    backgroundColor: theme.colors.surfaceVariant,
+    padding: 12,
+    borderRadius: 8,
+  },
+  characterAnalysis: {
+    backgroundColor: theme.colors.surfaceVariant,
+    borderRadius: 8,
+    padding: 16,
+  },
+  subsectionTitle: {
+    color: theme.colors.onSurfaceVariant,
+    marginBottom: 12,
+    fontWeight: '600',
+  },
+  characterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.outline,
+  },
+  characterInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  characterName: {
+    color: theme.colors.onSurface,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  characterStats: {
+    color: theme.colors.onSurfaceVariant,
+    fontSize: 12,
+  },
+  voiceButton: {
+    minWidth: 120,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+  },
+  dialogueSubtext: {
     marginBottom: 16,
+    color: theme.colors.onSurfaceVariant,
   },
   characterList: {
     gap: 8,
   },
   characterButton: {
-    marginVertical: 4,
+    marginBottom: 8,
   },
   voiceSettingsDialog: {
     maxHeight: '80%',
+  },
+  scrollContent: {
+    paddingBottom: 16,
+  },
+  testTextInput: {
+    marginBottom: 16,
   },
   voiceOptionContainer: {
     flexDirection: 'row',
@@ -233,22 +190,16 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   voiceName: {
     textTransform: 'capitalize',
   },
-  testButton: {
-    marginLeft: 8,
-  },
-  testingIndicator: {
-    marginLeft: 8,
-  },
-  testTextInput: {
-    marginBottom: 16,
-  },
   voiceDescription: {
     fontSize: 12,
     color: theme.colors.onSurfaceVariant,
     marginTop: 2,
   },
-  scrollContent: {
-    paddingBottom: 16,
+  testingIndicator: {
+    marginLeft: 8,
+  },
+  testButton: {
+    marginLeft: 8,
   },
 });
 
@@ -483,7 +434,7 @@ const ScriptDetail: React.FC = () => {
   const renderAnalysis = () => {
     if (!script?.analysis) return null;
 
-    const { metadata, characters } = script.analysis;
+    const { metadata, characters, scenes } = script.analysis;
 
     return (
       <View style={styles.section}>
@@ -493,36 +444,32 @@ const ScriptDetail: React.FC = () => {
         <View style={styles.analysisContainer}>
           <View style={styles.metadataRow}>
             <View style={styles.metadataItem}>
-              <Text variant="bodySmall">Total Lines</Text>
-              <Text variant="bodyLarge">{metadata.totalLines}</Text>
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Total Lines</Text>
+              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{metadata.totalLines}</Text>
             </View>
             <View style={styles.metadataItem}>
-              <Text variant="bodySmall">Duration</Text>
-              <Text variant="bodyLarge">{Math.round(metadata.estimatedDuration)} min</Text>
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Duration</Text>
+              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{Math.round(metadata.estimatedDuration)} min</Text>
             </View>
-            {metadata.genre && (
-              <View style={styles.metadataItem}>
-                <Text variant="bodySmall">Genre</Text>
-                <Text variant="bodyLarge">{metadata.genre}</Text>
-              </View>
-            )}
-            {metadata.tone && (
-              <View style={styles.metadataItem}>
-                <Text variant="bodySmall">Tone</Text>
-                <Text variant="bodyLarge">{metadata.tone}</Text>
-              </View>
-            )}
+            <View style={styles.metadataItem}>
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Scenes</Text>
+              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{scenes.length}</Text>
+            </View>
+            <View style={styles.metadataItem}>
+              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Characters</Text>
+              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{characters.length}</Text>
+            </View>
           </View>
 
           <View style={styles.characterAnalysis}>
             <Text variant="titleSmall" style={styles.subsectionTitle}>
-              Characters
+              Characters & Voice Assignment
             </Text>
             {characters.map((char) => (
               <View key={char.name} style={styles.characterRow}>
-                <View style={{ flex: 1 }}>
-                  <Text variant="bodyMedium">{char.name}</Text>
-                  <Text variant="bodySmall">
+                <View style={styles.characterInfo}>
+                  <Text variant="bodyLarge" style={styles.characterName}>{char.name}</Text>
+                  <Text variant="bodySmall" style={styles.characterStats}>
                     {char.lines} lines {characterVoices[char.name] ? 
                       `• ${characterVoices[char.name].voice.charAt(0).toUpperCase() + characterVoices[char.name].voice.slice(1)} (${VOICE_INFO[characterVoices[char.name].voice as VoiceOption].gender} | ${getVoiceDescription(characterVoices[char.name].voice as VoiceOption)})` : 
                       '• No voice assigned'}
@@ -531,6 +478,7 @@ const ScriptDetail: React.FC = () => {
                 <Button
                   mode="outlined"
                   onPress={() => handleAssignVoice(char.name)}
+                  style={styles.voiceButton}
                 >
                   {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
                 </Button>
@@ -538,27 +486,6 @@ const ScriptDetail: React.FC = () => {
             ))}
           </View>
         </View>
-      </View>
-    );
-  };
-
-  const renderContent = () => {
-    if (!scriptContent) return null;
-
-    return (
-      <View style={styles.section}>
-        <Text variant="titleMedium" style={styles.sectionTitle}>
-          Script Content
-        </Text>
-        <Card style={styles.contentCard}>
-          <Card.Content>
-            <ScrollView style={styles.contentScroll}>
-              <Text style={styles.contentText} selectable>
-                {scriptContent}
-              </Text>
-            </ScrollView>
-          </Card.Content>
-        </Card>
       </View>
     );
   };
@@ -635,7 +562,6 @@ const ScriptDetail: React.FC = () => {
         )}
 
         {renderAnalysis()}
-        {renderContent()}
       </ScrollView>
 
       <Portal>

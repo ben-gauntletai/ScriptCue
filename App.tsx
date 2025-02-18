@@ -63,6 +63,9 @@ const MainNavigator = () => (
         backgroundColor: theme.colors.background,
       },
       headerTintColor: theme.colors.primary,
+      headerTitleStyle: {
+        color: theme.colors.onBackground,
+      },
     }}
   >
     <MainStack.Screen 
@@ -103,7 +106,11 @@ const MainNavigator = () => (
     <MainStack.Screen 
       name="PracticeScript" 
       component={PracticeScript}
-      options={{ title: 'Practice Script' }}
+      options={({ route }) => ({
+        title: 'Practice Script',
+        headerShown: true,
+        headerBackTitleVisible: false,
+      })}
     />
   </MainStack.Navigator>
 );

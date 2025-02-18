@@ -6,6 +6,7 @@ import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script, ScriptCharacter } from '../../types/script';
 import firebaseService from '../../services/firebase';
+import { useFocusEffect } from '@react-navigation/native';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
 
@@ -47,6 +48,14 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    color: theme.colors.onBackground,
   },
   header: {
     flexDirection: 'row',
@@ -139,6 +148,21 @@ const PracticeScript: React.FC = () => {
   const styles = createStyles(theme);
   const { scriptId, characterId } = route.params;
 
+  // Set up navigation options
+  useEffect(() => {
+    navigation.setOptions({
+      headerShown: true,
+      headerTitle: currentCharacter ? `Practicing as ${currentCharacter.name}` : 'Practice Script',
+      headerRight: () => (
+        <IconButton 
+          icon="cog" 
+          onPress={() => setSettingsVisible(true)}
+          style={styles.settingsButton}
+        />
+      ),
+    });
+  }, [navigation, currentCharacter]);
+
   useEffect(() => {
     const loadScript = async () => {
       try {
@@ -229,27 +253,15 @@ const PracticeScript: React.FC = () => {
 
   if (!script || !currentCharacter) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <IconButton icon="arrow-left" onPress={handleBack} />
-          <Text>Loading...</Text>
-        </View>
-      </SafeAreaView>
+      <View style={[styles.container, styles.loadingContainer]}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+        <Text style={styles.loadingText}>Loading script...</Text>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <IconButton icon="arrow-left" onPress={handleBack} />
-        <Text>Practicing as {currentCharacter.name}</Text>
-        <IconButton 
-          icon="cog" 
-          onPress={handleSettings}
-          style={styles.settingsButton}
-        />
-      </View>
-
+    <View style={styles.container}>
       <ScrollView style={styles.content}>
         <View style={styles.dialogueContainer}>
           {dialogue.map((item, index) => (
@@ -323,7 +335,7 @@ const PracticeScript: React.FC = () => {
           </Dialog.Actions>
         </Dialog>
       </Portal>
-    </SafeAreaView>
+    </View>
   );
 };
 

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, StyleSheet, ScrollView, Platform } from 'react-native';
 import { Text, IconButton, useTheme, Button, Portal, Dialog, MD3Theme, RadioButton, ActivityIndicator, TextInput } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script, ScriptCharacter } from '../../types/script';
 import firebaseService from '../../services/firebase';
 import { useFocusEffect } from '@react-navigation/native';
+import { Camera, useCameraDevice, useCameraPermission, CameraPosition, CameraRuntimeError, CameraCaptureError, CameraDeviceFormat } from 'react-native-vision-camera';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
 
@@ -130,6 +131,84 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   characterButton: {
     marginBottom: 8,
   },
+  camera: {
+    width: '100%',
+    marginBottom: 16,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  recordingIndicator: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: theme.colors.error,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recordingText: {
+    color: theme.colors.onError,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  uploadingIndicator: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: theme.colors.primaryContainer,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  uploadingText: {
+    color: theme.colors.onPrimaryContainer,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: theme.colors.surface,
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+  },
+  errorContainer: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: theme.colors.errorContainer,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  errorText: {
+    color: theme.colors.onErrorContainer,
+    fontSize: 14,
+    flex: 1,
+    marginRight: 8,
+  },
 });
 
 const PracticeScript: React.FC = () => {
@@ -141,6 +220,16 @@ const PracticeScript: React.FC = () => {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [characterVoices, setCharacterVoices] = useState<Record<string, VoiceSettings>>({});
+  const [hasPermission, setHasPermission] = useState(false);
+  const [cameraPosition, setCameraPosition] = useState<CameraPosition>('front');
+  const [isVideoRecording, setIsVideoRecording] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraFormat, setCameraFormat] = useState<CameraDeviceFormat | null>(null);
+  const camera = useRef<Camera>(null);
+  const device = useCameraDevice(cameraPosition);
+  const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<PracticeScriptRouteProp>();
@@ -224,6 +313,46 @@ const PracticeScript: React.FC = () => {
     loadScript();
   }, [scriptId, characterId]);
 
+  useEffect(() => {
+    checkPermissions();
+  }, []);
+
+  useEffect(() => {
+    if (device?.formats) {
+      // Find the highest quality format that supports video
+      const videoFormats = device.formats.filter(f => {
+        // Check if the format supports video recording
+        return f.photoHeight && f.photoWidth && f.videoHeight && f.videoWidth;
+      });
+      const sortedFormats = videoFormats.sort((a, b) => {
+        // Sort by resolution (width * height)
+        const aRes = a.videoWidth * a.videoHeight;
+        const bRes = b.videoWidth * b.videoHeight;
+        return bRes - aRes;
+      });
+
+      // Select the highest quality format
+      const bestFormat = sortedFormats[0];
+      if (bestFormat) {
+        console.log('Selected camera format:', {
+          width: bestFormat.videoWidth,
+          height: bestFormat.videoHeight,
+          fps: bestFormat.maxFps,
+        });
+        setCameraFormat(bestFormat);
+      }
+    }
+  }, [device]);
+
+  const checkPermissions = async () => {
+    if (!cameraPermission) {
+      const newCameraPermission = await requestPermission();
+      setHasPermission(newCameraPermission);
+    } else {
+      setHasPermission(true);
+    }
+  };
+
   const handleBack = () => {
     navigation.goBack();
   };
@@ -241,14 +370,79 @@ const PracticeScript: React.FC = () => {
     setSettingsVisible(false);
   };
 
-  const handleStartRecording = () => {
-    setIsRecording(true);
-    // TODO: Implement recording functionality
+  const handleStartRecording = async () => {
+    if (!camera.current) {
+      setError('Camera not initialized');
+      return;
+    }
+
+    try {
+      setIsVideoRecording(true);
+      setIsRecording(true);
+      setCameraError(null);
+      
+      await camera.current.startRecording({
+        flash: 'off',
+        onRecordingFinished: async (video) => {
+          console.log('Recording finished:', video);
+          try {
+            setIsUploading(true);
+            setUploadProgress(0);
+            
+            const downloadUrl = await firebaseService.uploadPracticeVideo(
+              scriptId,
+              characterId,
+              video.path,
+              (progress: number) => {
+                setUploadProgress(progress);
+              }
+            );
+            
+            console.log('Video uploaded successfully:', downloadUrl);
+            setIsUploading(false);
+            setUploadProgress(0);
+          } catch (uploadError) {
+            console.error('Error uploading video:', uploadError);
+            setError('Failed to upload video. Please try again.');
+            setIsUploading(false);
+            setUploadProgress(0);
+          }
+        },
+        onRecordingError: (error: CameraCaptureError) => {
+          console.error('Recording error:', error);
+          setCameraError(`Recording failed: ${error.message}`);
+          setIsVideoRecording(false);
+          setIsRecording(false);
+        },
+      });
+    } catch (e) {
+      console.error('Error starting recording:', e);
+      setError('Failed to start recording. Please try again.');
+      setIsVideoRecording(false);
+      setIsRecording(false);
+    }
   };
 
-  const handleStopRecording = () => {
-    setIsRecording(false);
-    // TODO: Implement recording stop functionality
+  const handleStopRecording = async () => {
+    if (!camera.current) {
+      setError('Camera not initialized');
+      return;
+    }
+
+    try {
+      await camera.current.stopRecording();
+      setIsVideoRecording(false);
+      setIsRecording(false);
+    } catch (e) {
+      console.error('Error stopping recording:', e);
+      setError('Failed to stop recording. Please try again.');
+      setIsVideoRecording(false);
+      setIsRecording(false);
+    }
+  };
+
+  const toggleCameraPosition = () => {
+    setCameraPosition(current => current === 'front' ? 'back' : 'front');
   };
 
   if (!script || !currentCharacter) {
@@ -260,8 +454,79 @@ const PracticeScript: React.FC = () => {
     );
   }
 
+  if (!device || !hasPermission) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text>No camera available or permission denied</Text>
+        <Button onPress={checkPermissions}>Request Permission</Button>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      <Camera
+        ref={camera}
+        style={[styles.camera, {
+          aspectRatio: cameraFormat ? cameraFormat.videoWidth / cameraFormat.videoHeight : 16/9
+        }]}
+        device={device}
+        isActive={true}
+        video={true}
+        audio={true}
+        format={cameraFormat || undefined}
+        fps={cameraFormat?.maxFps}
+        lowLightBoost={device?.supportsLowLightBoost}
+        enableZoomGesture={true}
+        orientation="portrait"
+        onError={(error) => {
+          console.error('Camera error:', error);
+          setCameraError(`Camera error: ${error.message}`);
+        }}
+      />
+      {isVideoRecording && (
+        <View style={styles.recordingIndicator}>
+          <ActivityIndicator size="small" color={theme.colors.onError} />
+          <Text style={styles.recordingText}>Recording</Text>
+        </View>
+      )}
+      {isUploading && (
+        <View style={styles.uploadingIndicator}>
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+          <Text style={styles.uploadingText}>
+            Uploading video... {uploadProgress.toFixed(0)}%
+          </Text>
+        </View>
+      )}
+      {(error || cameraError) && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error || cameraError}</Text>
+          <IconButton
+            icon="close"
+            size={20}
+            onPress={() => {
+              setError(null);
+              setCameraError(null);
+            }}
+          />
+        </View>
+      )}
+      <View style={styles.controlsRow}>
+        <IconButton
+          icon="camera-flip"
+          size={24}
+          onPress={toggleCameraPosition}
+          disabled={isRecording || isUploading}
+        />
+        <Button
+          mode="contained"
+          onPress={isRecording ? handleStopRecording : handleStartRecording}
+          icon={isRecording ? "stop" : "video"}
+          disabled={isUploading || !!cameraError}
+        >
+          {isRecording ? "Stop Recording" : "Start Recording"}
+        </Button>
+      </View>
       <ScrollView style={styles.content}>
         <View style={styles.dialogueContainer}>
           {dialogue.map((item, index) => (
@@ -283,16 +548,6 @@ const PracticeScript: React.FC = () => {
           ))}
         </View>
       </ScrollView>
-
-      <View style={styles.controls}>
-        <Button
-          mode="contained"
-          onPress={isRecording ? handleStopRecording : handleStartRecording}
-          icon={isRecording ? "stop" : "microphone"}
-        >
-          {isRecording ? "Stop" : "Start"}
-        </Button>
-      </View>
 
       <Portal>
         <Dialog visible={!!error} onDismiss={() => setError(null)}>

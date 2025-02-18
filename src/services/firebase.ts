@@ -517,16 +517,19 @@ class FirebaseService {
   private handleStorageError(error: any): Error {
     console.error('Storage error:', error);
     
-    switch (error.code) {
-      case 'storage/unauthorized':
-        return new Error('You do not have permission to access this file');
-      case 'storage/canceled':
-        return new Error('Upload was canceled');
-      case 'storage/unknown':
-        return new Error('An unknown error occurred during upload');
-      default:
-        return new Error('Failed to upload file. Please try again.');
+    if (error.code === 'storage/unauthorized') {
+      return new Error('You are not authorized to access this resource');
     }
+    
+    if (error.code === 'storage/canceled') {
+      return new Error('Upload was cancelled');
+    }
+    
+    if (error.code === 'storage/unknown') {
+      return new Error('An unknown error occurred during upload');
+    }
+    
+    return error;
   }
 
   async getScripts(): Promise<Script[]> {
@@ -716,6 +719,57 @@ class FirebaseService {
     } catch (error) {
       console.error('Error saving character voices:', error);
       throw this.handleFirestoreError(error);
+    }
+  }
+
+  async uploadPracticeVideo(
+    scriptId: string,
+    characterId: string,
+    videoPath: string,
+    onProgress?: (progress: number) => void
+  ): Promise<string> {
+    try {
+      const user = auth().currentUser;
+      if (!user) throw new Error('User not authenticated');
+
+      // Create a reference to the video file in Firebase Storage
+      const timestamp = new Date().getTime();
+      const videoFileName = `practice_${scriptId}_${characterId}_${timestamp}.mp4`;
+      const storageRef = storage().ref(`practice-videos/${user.uid}/${scriptId}/${videoFileName}`);
+
+      // Upload the video file with progress tracking
+      const task = storageRef.putFile(videoPath);
+      
+      if (onProgress) {
+        task.on('state_changed', (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          onProgress(progress);
+        });
+      }
+
+      // Wait for the upload to complete
+      await task;
+
+      // Get the download URL
+      const downloadUrl = await storageRef.getDownloadURL();
+
+      // Update the script document with the video reference
+      await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .collection('practiceVideos')
+        .add({
+          userId: user.uid,
+          characterId,
+          videoUrl: downloadUrl,
+          createdAt: firestore.FieldValue.serverTimestamp(),
+          fileName: videoFileName
+        });
+
+      return downloadUrl;
+    } catch (error: any) {
+      console.error('Error uploading practice video:', error);
+      throw this.handleStorageError(error);
     }
   }
 }

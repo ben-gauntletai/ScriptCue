@@ -17,7 +17,6 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ScriptsOverview, NewScript, ScriptDetail, EditScript } from './src/screens';
 import { SignInScreen } from './src/screens/auth/SignInScreen';
 import { SignUpScreen } from './src/screens/auth/SignUpScreen';
-import { CharacterSelectionScreen } from './src/screens/script/CharacterSelectionScreen';
 import { ScriptReaderScreen } from './src/screens/script/ScriptReaderScreen';
 import PracticeScript from './src/screens/script/PracticeScript';
 import { RootStackParamList, AuthStackParamList, MainStackParamList } from './src/navigation/types';
@@ -87,11 +86,6 @@ const MainNavigator = () => (
       name="ScriptDetail" 
       component={ScriptDetail}
       options={{ title: 'Script Details' }}
-    />
-    <MainStack.Screen 
-      name="CharacterSelection" 
-      component={CharacterSelectionScreen}
-      options={{ title: 'Select Character' }}
     />
     <MainStack.Screen 
       name="ScriptReader" 

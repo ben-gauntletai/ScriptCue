@@ -1,6 +1,10 @@
 import * as admin from "firebase-admin";
 import * as pdfParse from "pdf-parse";
 import { CloudEvent } from "firebase-functions/v2";
+import { OpenAI } from 'openai';
+import { defineSecret } from 'firebase-functions/params';
+
+const OPENAI_API_KEY = defineSecret('OPENAI_API_KEY');
 
 interface ScriptAnalysis {
   characters: Array<{
@@ -39,43 +43,72 @@ type StorageObjectMetadata = CloudEvent<{
   };
 }>;
 
-const updateProcessingStatus = async (
+interface ValidationState {
+  isValidated: boolean;
+  results: Record<string, boolean> | null;
+  timestamp: Date;
+}
+
+interface ProcessingState {
+  status: 'initializing' | 'processing' | 'validating' | 'completed' | 'error';
+  progress: number;
+  error?: string;
+  characterCount?: number;
+  validatedCharacters?: number;
+  timestamp: admin.firestore.FieldValue;
+  scriptId: string;
+  batchesProcessed?: number;
+  totalBatches?: number;
+}
+
+interface CharacterBatch {
+  batchId: string;
+  characters: Array<{
+    name: string;
+    lines: number;
+    firstAppearance: number;
+    dialogue: Array<{ text: string; lineNumber: number }>;
+  }>;
+  processed: boolean;
+  chunkIndex: number;
+  totalChunks: number;
+}
+
+const validationStates = new Map<string, ValidationState>();
+
+async function updateProcessingState(
   scriptId: string,
-  status: string,
-  progress: number | null = null,
-  error: string | null = null,
-): Promise<void> => {
-  const statusRef = admin.firestore().collection("scriptProcessing").doc(scriptId);
+  update: Partial<Omit<ProcessingState, 'status' | 'timestamp' | 'scriptId' | 'progress'>> & { 
+    status: ProcessingState['status'];
+    progress: number;
+  }
+): Promise<void> {
+  const stateRef = admin.firestore().collection("scriptProcessing").doc(scriptId);
   const scriptRef = admin.firestore().collection("scripts").doc(scriptId);
   
-  const updateData: {
-    status: string;
-    progress?: number;
-    error?: string;
-    updatedAt: admin.firestore.FieldValue;
-  } = {
-    status,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
+  await admin.firestore().runTransaction(async (transaction) => {
+    const stateDoc = await transaction.get(stateRef);
+    const currentState = stateDoc.data() as ProcessingState | undefined;
+    
+    const newState: ProcessingState = {
+      ...currentState,
+      ...update,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      scriptId,
+      status: update.status,
+      progress: update.progress,
+    };
 
-  // Only add progress and error if they are not null
-  if (progress !== null) {
-    updateData.progress = progress;
-  }
-  if (error !== null) {
-    updateData.error = error;
-  }
-
-  // Update both the processing status and the script document
-  await Promise.all([
-    statusRef.set(updateData, { merge: true }),
-    scriptRef.update({
-      uploadStatus: status.toLowerCase() === "completed" ? "completed" : "processing",
+    transaction.set(stateRef, newState);
+    
+    // Update script status if needed
+    transaction.update(scriptRef, {
+      uploadStatus: update.status === 'completed' ? 'completed' : 'processing',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      ...(error ? { error } : {}),
-    }),
-  ]);
-};
+      ...(update.error ? { error: update.error } : {}),
+    });
+  });
+}
 
 const validatePDF = async (buffer: Buffer): Promise<void> => {
   let debugInfo = {
@@ -406,6 +439,199 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
   };
 };
 
+async function saveValidatedResults(
+  scriptId: string,
+  uploadedBy: string | undefined,
+  fileName: string,
+  text: string,
+  analysis: ScriptAnalysis,
+  validatedCharacters: Array<any>,
+  originalCharacterCount: number
+): Promise<void> {
+  // Use transaction for atomic saves
+  await admin.firestore().runTransaction(async (transaction) => {
+    const analysisRef = admin.firestore().collection("scriptAnalysis").doc(scriptId);
+    const scriptRef = admin.firestore().collection("scripts").doc(scriptId);
+    const statusRef = admin.firestore().collection("scriptProcessing").doc(scriptId);
+
+    // Perform all updates in single transaction
+    transaction.set(analysisRef, {
+      scriptId,
+      uploadedBy: uploadedBy || "unknown",
+      originalName: fileName,
+      content: text,
+      analysis: analysis,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    transaction.update(scriptRef, {
+      analysis: analysis,
+      uploadStatus: "completed",
+      status: "ready",
+      userId: uploadedBy,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(statusRef, {
+      status: "completed",
+      progress: 100,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+
+  console.log(`[${scriptId}] Processing completed successfully with ${validatedCharacters.length} valid characters out of ${originalCharacterCount} detected characters`);
+}
+
+async function getValidationState(scriptId: string): Promise<ValidationState | null> {
+  const doc = await admin.firestore()
+    .collection('scriptValidation')
+    .doc(scriptId)
+    .get();
+  
+  if (!doc.exists) return null;
+  return doc.data() as ValidationState;
+}
+
+async function clearValidationState(scriptId: string): Promise<void> {
+  await admin.firestore()
+    .collection('scriptValidation')
+    .doc(scriptId)
+    .delete();
+}
+
+async function saveBatch(
+  scriptId: string,
+  batch: CharacterBatch
+): Promise<void> {
+  const batchRef = admin.firestore()
+    .collection("scriptProcessing")
+    .doc(scriptId)
+    .collection("batches")
+    .doc(batch.batchId);
+
+  await batchRef.set({
+    ...batch,
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+async function processBatches(
+  scriptId: string,
+  openai: OpenAI
+): Promise<Record<string, boolean>> {
+  const batchesRef = admin.firestore()
+    .collection("scriptProcessing")
+    .doc(scriptId)
+    .collection("batches");
+  
+  console.log(`[${scriptId}] Fetching unprocessed batches...`);
+  const batches = await batchesRef.where("processed", "==", false).get();
+  
+  if (batches.empty) {
+    console.log(`[${scriptId}] No unprocessed batches found`);
+    return {};
+  }
+
+  console.log(`[${scriptId}] Found ${batches.docs.length} unprocessed batches`);
+
+  const allCharacters = new Map<string, {
+    name: string;
+    firstLine: string;
+    totalLines: number;
+    firstAppearance: number;
+  }>();
+
+  // Collect all unique characters
+  batches.docs.forEach(doc => {
+    const batch = doc.data() as CharacterBatch;
+    console.log(`[${scriptId}] Processing batch ${batch.batchId} (${batch.chunkIndex + 1}/${batch.totalChunks}):`, {
+      characters: batch.characters.length,
+      processed: batch.processed,
+    });
+
+    batch.characters.forEach(char => {
+      if (!allCharacters.has(char.name)) {
+        allCharacters.set(char.name, {
+          name: char.name,
+          firstLine: char.dialogue[0]?.text || '',
+          totalLines: char.lines,
+          firstAppearance: char.firstAppearance,
+        });
+      }
+    });
+  });
+
+  // Validate all characters at once
+  const characterList = Array.from(allCharacters.values());
+  
+  console.log(`[${scriptId}] Collected unique characters:`, characterList.map(char => ({
+    name: char.name,
+    totalLines: char.totalLines,
+    firstAppearance: char.firstAppearance,
+    firstLine: char.firstLine.substring(0, 50) + (char.firstLine.length > 50 ? '...' : ''),
+  })));
+  
+  console.log(`[${scriptId}] Making OpenAI API call for ${characterList.length} characters`);
+  
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "You are a script analysis expert. Your task is to determine if given names from a script represent actual characters (people) or not. For each name, consider the context from their first line of dialogue if provided. Respond with a JSON object where keys are character names and values are boolean (true if it's a character, false if it's not a character like stage directions, scene headings, etc.). IMPORTANT: Respond with ONLY the JSON object, no markdown formatting or additional text."
+      },
+      {
+        role: "user",
+        content: JSON.stringify(characterList, null, 2)
+      }
+    ],
+    temperature: 0,
+    max_tokens: 1000
+  });
+
+  if (!response.choices[0]?.message?.content) {
+    throw new Error('Empty response from OpenAI');
+  }
+
+  console.log(`[${scriptId}] Raw OpenAI response:`, response.choices[0].message.content);
+
+  let validationResults: Record<string, boolean>;
+  try {
+    // Clean the response to ensure it's valid JSON
+    const cleanedResponse = response.choices[0].message.content
+      .replace(/^```json\s*/, '') // Remove leading ```json
+      .replace(/\s*```$/, '')     // Remove trailing ```
+      .trim();                    // Remove any extra whitespace
+
+    validationResults = JSON.parse(cleanedResponse);
+    
+    console.log(`[${scriptId}] Parsed validation results:`, validationResults);
+    
+    // Verify the response format
+    const isValidFormat = Object.entries(validationResults).every(
+      ([key, value]) => typeof key === 'string' && typeof value === 'boolean'
+    );
+    
+    if (!isValidFormat) {
+      throw new Error('Invalid validation results format');
+    }
+  } catch (parseError) {
+    console.error(`[${scriptId}] Failed to parse OpenAI response:`, {
+      error: parseError instanceof Error ? parseError.message : String(parseError),
+      rawResponse: response.choices[0].message.content,
+    });
+    throw new Error(`Failed to parse character validation results: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+  }
+
+  // Mark all batches as processed
+  console.log(`[${scriptId}] Marking ${batches.docs.length} batches as processed`);
+  await Promise.all(
+    batches.docs.map(doc => doc.ref.update({ processed: true }))
+  );
+
+  return validationResults;
+}
+
 /**
  * Processes an uploaded script file from Cloud Storage.
  * Analyzes the content and stores the results in Firestore.
@@ -416,31 +642,39 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
   const scriptId = data.metadata?.scriptId;
   const uploadedBy = data.metadata?.uploadedBy;
 
-  console.log("Starting script processing:", {
-    scriptId,
-    uploadedBy,
-    fileName: data.name,
-    bucket: data.bucket,
-  });
-
   if (!scriptId) {
     console.error("No scriptId provided in metadata");
     return;
   }
 
   try {
-    await updateProcessingStatus(scriptId, "Initializing", 0);
-    console.log(`[${scriptId}] Processing status updated: Initializing`);
-    
+    await updateProcessingState(scriptId, {
+      status: 'initializing',
+      progress: 0,
+    });
+
+    console.log("Starting script processing:", {
+      scriptId,
+      uploadedBy,
+      fileName: data.name,
+      bucket: data.bucket,
+    });
+
     const bucket = admin.storage().bucket(data.bucket);
     const file = bucket.file(data.name);
     
-    await updateProcessingStatus(scriptId, "Downloading PDF", 10);
+    await updateProcessingState(scriptId, {
+      status: 'processing',
+      progress: 10,
+    });
     console.log(`[${scriptId}] Downloading PDF file: ${data.name}`);
     const [fileContent] = await file.download();
     console.log(`[${scriptId}] PDF downloaded successfully, size: ${fileContent.length} bytes`);
 
-    await updateProcessingStatus(scriptId, "Validating PDF", 20);
+    await updateProcessingState(scriptId, {
+      status: 'validating',
+      progress: 20,
+    });
     console.log(`[${scriptId}] Starting PDF validation...`);
     
     try {
@@ -454,16 +688,26 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
       throw validationError;
     }
 
-    await updateProcessingStatus(scriptId, "Extracting text", 30);
+    await updateProcessingState(scriptId, {
+      status: 'processing',
+      progress: 30,
+    });
     console.log(`[${scriptId}] Starting text extraction`);
     const pdfData = await pdfParse(fileContent);
     const text = pdfData.text;
     console.log(`[${scriptId}] Text extracted successfully, length: ${text.length} characters`);
 
-    await updateProcessingStatus(scriptId, "Analyzing script", 40);
     const chunks = chunkText(text);
-    console.log(`[${scriptId}] Text chunked into ${chunks.length} parts for analysis`);
+    const totalChunks = chunks.length;
+    const totalLines = text.split("\n").length;
     
+    await updateProcessingState(scriptId, {
+      status: 'processing',
+      progress: 30,
+      totalBatches: totalChunks,
+      batchesProcessed: 0,
+    });
+
     const analysis: ScriptAnalysis = {
       characters: [],
       scenes: [],
@@ -472,98 +716,108 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
         estimatedDuration: 0,
       },
     };
-    
-    // Calculate total lines in the script
-    const totalLines = text.split("\n").length;
-    console.log(`[${scriptId}] Total lines in script: ${totalLines}`);
-    
-    const linesPerChunk = Math.ceil(totalLines / chunks.length);
-    
+
+    // Process chunks and save batches
     for (let i = 0; i < chunks.length; i++) {
-      const startLine = i * linesPerChunk;
-      const endLine = Math.min((i + 1) * linesPerChunk, totalLines);
+      const chunkAnalysis = analyzeChunk(chunks[i], i * Math.ceil(totalLines / chunks.length));
       
-      await updateProcessingStatus(
-        scriptId,
-        `Analyzing chunk ${i + 1} of ${chunks.length}`,
-        40 + Math.floor((i / chunks.length) * 50),
-      );
+      const batch: CharacterBatch = {
+        batchId: `batch_${i}`,
+        characters: chunkAnalysis.characters,
+        processed: false,
+        chunkIndex: i,
+        totalChunks,
+      };
 
-      console.log(`[${scriptId}] Processing chunk ${i + 1}/${chunks.length}, lines ${startLine}-${endLine}`);
-
-      const chunkAnalysis = analyzeChunk(chunks[i], startLine);
-      
-      console.log(`[${scriptId}] Chunk ${i + 1} analysis:`, {
-        characters: chunkAnalysis.characters.length,
-        scenes: chunkAnalysis.scenes.length,
-        lines: chunkAnalysis.metadata.totalLines,
-      });
+      await saveBatch(scriptId, batch);
       
       // Merge chunk analysis into combined analysis
       analysis.characters = mergeCharacters(analysis.characters, chunkAnalysis.characters);
       analysis.scenes = mergeScenes(analysis.scenes, chunkAnalysis.scenes);
       analysis.metadata.totalLines += chunkAnalysis.metadata.totalLines;
       analysis.metadata.estimatedDuration += chunkAnalysis.metadata.estimatedDuration;
+      
+      await updateProcessingState(scriptId, {
+        status: 'processing',
+        progress: 30 + Math.floor((i / chunks.length) * 40),
+        batchesProcessed: i + 1,
+      });
     }
 
-    console.log(`[${scriptId}] Final analysis:`, {
-      characters: analysis.characters.length,
-      scenes: analysis.scenes.length,
-      totalLines: analysis.metadata.totalLines,
-      estimatedDuration: analysis.metadata.estimatedDuration,
+    // Initialize OpenAI client
+    if (!OPENAI_API_KEY) {
+      throw new Error('OpenAI API key is not configured');
+    }
+
+    const openai = new OpenAI({
+      apiKey: OPENAI_API_KEY.value(),
     });
 
-    // Calculate total lines by summing up all character lines
-    const totalDialogueLines = analysis.characters.reduce((sum, char) => sum + char.lines, 0);
-    analysis.metadata.totalLines = totalDialogueLines;
-    analysis.metadata.estimatedDuration = Math.ceil(totalDialogueLines / 60);
+    await updateProcessingState(scriptId, {
+      status: 'validating',
+      progress: 70,
+    });
 
-    await updateProcessingStatus(scriptId, "Saving results", 90);
-    console.log(`[${scriptId}] Saving analysis results to Firestore`);
+    // Process all batches
+    const validationResults = await processBatches(scriptId, openai);
 
-    // Save analysis to scriptAnalysis collection
-    const analysisRef = admin.firestore().collection("scriptAnalysis").doc(scriptId);
-    await analysisRef.set({
+    // After character analysis, perform validation
+    if (!analysis.characters || analysis.characters.length === 0) {
+      throw new Error('No characters detected for validation');
+    }
+
+    console.log(`[${scriptId}] Starting character validation for ${analysis.characters.length} characters`);
+    await updateProcessingState(scriptId, {
+      status: 'processing',
+      progress: 85,
+    });
+
+    // Filter characters based on validation results
+    console.log(`[${scriptId}] Filtering characters based on validation results`);
+    const validatedCharacters = analysis.characters.filter((char) => {
+      const isValid = validationResults?.[char.name];
+      if (!isValid) {
+        console.log(`[${scriptId}] Removed invalid character: ${char.name}`);
+        analysis.metadata.totalLines -= char.lines;
+      }
+      return isValid;
+    });
+
+    // Update the characters array with only valid characters
+    analysis.characters = validatedCharacters;
+    console.log(`[${scriptId}] Updated analysis with ${validatedCharacters.length} valid characters`);
+
+    // Recalculate duration
+    analysis.metadata.estimatedDuration = Math.ceil(analysis.metadata.totalLines / 60);
+
+    // Save the results
+    console.log(`[${scriptId}] Saving validated results`);
+    await saveValidatedResults(
       scriptId,
-      uploadedBy: uploadedBy || "unknown",
-      originalName: data.metadata?.originalName || data.name,
-      content: text,
-      analysis: analysis,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    console.log(`[${scriptId}] Analysis saved to scriptAnalysis collection`);
-
-    // Update the script document with the analysis results and mark as completed
-    const scriptRef = admin.firestore().collection("scripts").doc(scriptId);
-    await scriptRef.update({
-      analysis: analysis,
-      uploadStatus: "completed",
-      status: "ready",
-      userId: uploadedBy,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    console.log(`[${scriptId}] Script document updated with analysis results`);
-
-    // Mark processing as completed
-    await updateProcessingStatus(scriptId, "completed", 100);
-    console.log(`[${scriptId}] Processing completed successfully`);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const errorStack = error instanceof Error ? error.stack : undefined;
-    
-    console.error(`[${scriptId}] Error processing script:`, {
-      message: errorMessage,
-      stack: errorStack,
-      phase: "script processing",
-      timestamp: new Date().toISOString(),
-    });
-    
-    await updateProcessingStatus(
-      scriptId,
-      "error",
-      null,
-      `Processing failed: ${errorMessage}`
+      uploadedBy,
+      data.metadata?.originalName || data.name,
+      text,
+      analysis,
+      validatedCharacters,
+      analysis.characters.length
     );
+
+  } catch (error) {
+    console.error(`[${scriptId}] Processing Error:`, {
+      error: error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      } : error,
+      phase: 'script processing'
+    });
+    
+    await updateProcessingState(scriptId, {
+      status: 'error',
+      progress: 0,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    
     throw error;
   }
 }

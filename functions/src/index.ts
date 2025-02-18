@@ -34,7 +34,10 @@ const OPENAI_API_KEY = defineSecret('OPENAI_API_KEY');
 
 // Export functions
 export const processScript = onObjectFinalized(
-  { timeoutSeconds: 540 },
+  { 
+    timeoutSeconds: 540,
+    secrets: [OPENAI_API_KEY]
+  },
   processUploadedScript
 );
 

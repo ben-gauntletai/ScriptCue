@@ -43,12 +43,6 @@ type StorageObjectMetadata = CloudEvent<{
   };
 }>;
 
-interface ValidationState {
-  isValidated: boolean;
-  results: Record<string, boolean> | null;
-  timestamp: Date;
-}
-
 interface ProcessingState {
   status: 'initializing' | 'processing' | 'validating' | 'completed' | 'error';
   progress: number;
@@ -74,7 +68,29 @@ interface CharacterBatch {
   totalChunks: number;
 }
 
-const validationStates = new Map<string, ValidationState>();
+type VoiceOption = 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'onyx' | 'nova' | 'sage' | 'shimmer';
+
+interface VoiceInfo {
+  description: string;
+  gender: 'Male' | 'Female';
+}
+
+const VOICE_INFO: Record<VoiceOption, VoiceInfo> = {
+  alloy: { description: 'Warm, steady', gender: 'Male' },
+  ash: { description: 'Deep, authoritative', gender: 'Male' },
+  coral: { description: 'Bright, expressive', gender: 'Female' },
+  echo: { description: 'Smooth, refined', gender: 'Male' },
+  fable: { description: 'Soft, lyrical', gender: 'Male' },
+  onyx: { description: 'Bold, resonant', gender: 'Male' },
+  nova: { description: 'Youthful, energetic', gender: 'Female' },
+  sage: { description: 'Calm, wise', gender: 'Female' },
+  shimmer: { description: 'Airy, melodic', gender: 'Female' }
+};
+
+interface CharacterVoiceSettings {
+  voice: VoiceOption;
+  testText: string;
+}
 
 async function updateProcessingState(
   scriptId: string,
@@ -439,6 +455,93 @@ const analyzeChunk = (text: string, startLine: number): ScriptAnalysis => {
   };
 };
 
+async function assignVoicesToCharacters(
+  characters: ScriptAnalysis['characters'],
+  openai: OpenAI
+): Promise<Record<string, CharacterVoiceSettings>> {
+  // Get gender predictions for all characters
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "You are a script analysis expert. Your task is to predict the gender (Male/Female) of character names. Respond with a JSON object where keys are character names and values are 'Male' or 'Female'. Base your prediction on common naming conventions and character context if provided. IMPORTANT: Respond with ONLY the JSON object, no markdown formatting or additional text."
+      },
+      {
+        role: "user",
+        content: JSON.stringify(characters.map(char => ({
+          name: char.name,
+          firstLine: char.dialogue[0]?.text || ''
+        })))
+      }
+    ],
+    temperature: 0,
+    max_tokens: 1000
+  });
+
+  if (!response.choices[0]?.message?.content) {
+    throw new Error('Empty response from OpenAI');
+  }
+
+  // Parse gender predictions
+  const genderPredictions = JSON.parse(response.choices[0].message.content.trim()) as Record<string, 'Male' | 'Female'>;
+
+  // Group voices by gender
+  const maleVoices: VoiceOption[] = [];
+  const femaleVoices: VoiceOption[] = [];
+  
+  Object.entries(VOICE_INFO).forEach(([voice, info]) => {
+    if (info.gender === 'Male') {
+      maleVoices.push(voice as VoiceOption);
+    } else {
+      femaleVoices.push(voice as VoiceOption);
+    }
+  });
+
+  // Group characters by gender
+  const maleCharacters: typeof characters = [];
+  const femaleCharacters: typeof characters = [];
+
+  // Sort characters by number of lines (descending) to prioritize main characters
+  const sortedCharacters = [...characters].sort((a, b) => b.lines - a.lines);
+
+  // Split characters into gender groups
+  sortedCharacters.forEach(char => {
+    const predictedGender = genderPredictions[char.name];
+    if (predictedGender === 'Male') {
+      maleCharacters.push(char);
+    } else {
+      femaleCharacters.push(char);
+    }
+  });
+
+  // Assign voices to characters
+  const voiceAssignments: Record<string, CharacterVoiceSettings> = {};
+
+  // Helper function to assign voices for a gender group
+  const assignVoicesForGender = (
+    chars: typeof characters,
+    voices: VoiceOption[]
+  ) => {
+    chars.forEach((char, index) => {
+      // Use modulo to cycle through available voices of the same gender
+      const voiceIndex = index % voices.length;
+      const selectedVoice = voices[voiceIndex];
+
+      voiceAssignments[char.name] = {
+        voice: selectedVoice,
+        testText: char.dialogue[0]?.text || `This is ${char.name}'s voice.`
+      };
+    });
+  };
+
+  // Assign voices for each gender group
+  assignVoicesForGender(maleCharacters, maleVoices);
+  assignVoicesForGender(femaleCharacters, femaleVoices);
+
+  return voiceAssignments;
+}
+
 async function saveValidatedResults(
   scriptId: string,
   uploadedBy: string | undefined,
@@ -446,13 +549,15 @@ async function saveValidatedResults(
   text: string,
   analysis: ScriptAnalysis,
   validatedCharacters: Array<any>,
-  originalCharacterCount: number
+  originalCharacterCount: number,
+  voiceAssignments: Record<string, CharacterVoiceSettings>
 ): Promise<void> {
   // Use transaction for atomic saves
   await admin.firestore().runTransaction(async (transaction) => {
     const analysisRef = admin.firestore().collection("scriptAnalysis").doc(scriptId);
     const scriptRef = admin.firestore().collection("scripts").doc(scriptId);
     const statusRef = admin.firestore().collection("scriptProcessing").doc(scriptId);
+    const voicesRef = admin.firestore().collection("scripts").doc(scriptId).collection("settings").doc("voices");
 
     // Perform all updates in single transaction
     transaction.set(analysisRef, {
@@ -477,26 +582,12 @@ async function saveValidatedResults(
       progress: 100,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    // Save voice assignments
+    transaction.set(voicesRef, voiceAssignments);
   });
 
   console.log(`[${scriptId}] Processing completed successfully with ${validatedCharacters.length} valid characters out of ${originalCharacterCount} detected characters`);
-}
-
-async function getValidationState(scriptId: string): Promise<ValidationState | null> {
-  const doc = await admin.firestore()
-    .collection('scriptValidation')
-    .doc(scriptId)
-    .get();
-  
-  if (!doc.exists) return null;
-  return doc.data() as ValidationState;
-}
-
-async function clearValidationState(scriptId: string): Promise<void> {
-  await admin.firestore()
-    .collection('scriptValidation')
-    .doc(scriptId)
-    .delete();
 }
 
 async function saveBatch(
@@ -790,8 +881,13 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
     // Recalculate duration
     analysis.metadata.estimatedDuration = Math.ceil(analysis.metadata.totalLines / 60);
 
-    // Save the results
-    console.log(`[${scriptId}] Saving validated results`);
+    // After character validation, perform voice assignment
+    console.log(`[${scriptId}] Starting voice assignment for ${validatedCharacters.length} characters`);
+    const voiceAssignments = await assignVoicesToCharacters(validatedCharacters, openai);
+    console.log(`[${scriptId}] Voice assignment completed:`, voiceAssignments);
+
+    // Save the results with voice assignments
+    console.log(`[${scriptId}] Saving validated results with voice assignments`);
     await saveValidatedResults(
       scriptId,
       uploadedBy,
@@ -799,7 +895,8 @@ export async function processUploadedScript(event: StorageObjectMetadata): Promi
       text,
       analysis,
       validatedCharacters,
-      analysis.characters.length
+      analysis.characters.length,
+      voiceAssignments
     );
 
   } catch (error) {

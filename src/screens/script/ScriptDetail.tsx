@@ -9,6 +9,7 @@ import { Script, ScriptScene, ScriptCharacter, ProcessingStatus } from '../../ty
 import firebaseService from '../../services/firebase';
 import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 import Sound from 'react-native-sound';
+import RecordingsDialog from './components/RecordingsDialog';
 
 type ScriptDetailRouteProp = RouteProp<MainStackParamList, 'ScriptDetail'>;
 
@@ -44,39 +45,44 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.surfaceVariant,
   },
-  titleContainer: {
-    flex: 1,
-    marginRight: 16,
+  titleRow: {
+    marginBottom: 16,
   },
   title: {
     color: theme.colors.onSurface,
+    fontSize: 28,
     fontWeight: '600',
   },
-  headerActions: {
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  leftActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
   },
-  practiceButton: {
-    marginRight: 8,
+  rightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   content: {
     flex: 1,
+    padding: 16,
   },
   section: {
-    padding: 16,
     backgroundColor: theme.colors.surface,
-    marginBottom: 12,
+    marginBottom: 16,
     borderRadius: 12,
     elevation: 2,
+    overflow: 'hidden',
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
@@ -85,14 +91,23 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3.84,
   },
+  sectionHeader: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.surfaceVariant,
+  },
   sectionTitle: {
     color: theme.colors.primary,
     fontWeight: '600',
-    marginBottom: 12,
+    fontSize: 18,
+  },
+  sectionContent: {
+    padding: 16,
   },
   description: {
     color: theme.colors.onSurfaceVariant,
     lineHeight: 22,
+    fontSize: 16,
   },
   analysisContainer: {
     gap: 16,
@@ -201,12 +216,6 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   testButton: {
     marginLeft: 8,
   },
-  fab: {
-    position: 'absolute',
-    margin: 16,
-    right: 0,
-    bottom: 0,
-  },
 });
 
 const ScriptDetail: React.FC = () => {
@@ -228,19 +237,14 @@ const ScriptDetail: React.FC = () => {
   const [sound, setSound] = useState<Sound | null>(null);
   const [testText, setTestText] = useState<string>('');
   const [characterVoices, setCharacterVoices] = useState<Record<string, VoiceSettings>>({});
+  const [recordingsDialogVisible, setRecordingsDialogVisible] = useState(false);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<ScriptDetailRouteProp>();
   const { user } = useAuth();
   const theme = useTheme();
   const styles = createStyles(theme);
-  const { scriptId, showCharacterSelect } = route.params;
-
-  useEffect(() => {
-    if (showCharacterSelect) {
-      setPracticeDialogVisible(true);
-    }
-  }, [showCharacterSelect]);
+  const { scriptId } = route.params;
 
   useEffect(() => {
     let unsubscribe: () => void;
@@ -445,65 +449,6 @@ const ScriptDetail: React.FC = () => {
     }
   };
 
-  const renderAnalysis = () => {
-    if (!script?.analysis) return null;
-
-    const { metadata, characters, scenes } = script.analysis;
-
-    return (
-      <View style={styles.section}>
-        <Text variant="titleMedium" style={styles.sectionTitle}>
-          Script Analysis
-        </Text>
-        <View style={styles.analysisContainer}>
-          <View style={styles.metadataRow}>
-            <View style={styles.metadataItem}>
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Total Lines</Text>
-              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{metadata.totalLines}</Text>
-            </View>
-            <View style={styles.metadataItem}>
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Duration</Text>
-              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{Math.round(metadata.estimatedDuration)} min</Text>
-            </View>
-            <View style={styles.metadataItem}>
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Scenes</Text>
-              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{scenes.length}</Text>
-            </View>
-            <View style={styles.metadataItem}>
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Characters</Text>
-              <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>{characters.length}</Text>
-            </View>
-          </View>
-
-          <View style={styles.characterAnalysis}>
-            <Text variant="titleSmall" style={styles.subsectionTitle}>
-              Characters & Voice Assignment
-            </Text>
-            {characters.map((char) => (
-              <View key={char.name} style={styles.characterRow}>
-                <View style={styles.characterInfo}>
-                  <Text variant="bodyLarge" style={styles.characterName}>{char.name}</Text>
-                  <Text variant="bodySmall" style={styles.characterStats}>
-                    {char.lines} lines {characterVoices[char.name] ? 
-                      `• ${characterVoices[char.name].voice.charAt(0).toUpperCase() + characterVoices[char.name].voice.slice(1)} (${VOICE_INFO[characterVoices[char.name].voice as VoiceOption].gender} | ${getVoiceDescription(characterVoices[char.name].voice as VoiceOption)})` : 
-                      '• No voice assigned'}
-                  </Text>
-                </View>
-                <Button
-                  mode="outlined"
-                  onPress={() => handleAssignVoice(char.name)}
-                  style={styles.voiceButton}
-                >
-                  {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
-                </Button>
-              </View>
-            ))}
-          </View>
-        </View>
-      </View>
-    );
-  };
-
   if (loading) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
@@ -523,68 +468,122 @@ const ScriptDetail: React.FC = () => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.titleContainer}>
-          <Text variant="headlineMedium" style={styles.title}>
+        <View style={styles.titleRow}>
+          <Text style={styles.title} numberOfLines={2}>
             {script.title}
           </Text>
         </View>
-        <View style={styles.headerActions}>
-          <Button
-            mode="contained"
-            onPress={() => setPracticeDialogVisible(true)}
-            icon="microphone"
-            style={styles.practiceButton}
-            disabled={!script.analysis?.characters?.length}
-          >
-            Practice
-          </Button>
-          <Menu
-            visible={menuVisible}
-            onDismiss={() => setMenuVisible(false)}
-            anchor={
-              <IconButton
-                icon="dots-vertical"
-                onPress={() => setMenuVisible(true)}
-              />
-            }
-          >
-            <Menu.Item 
+        <View style={styles.actionsRow}>
+          <View style={styles.leftActions}>
+            <Button
+              mode="contained"
+              onPress={() => setPracticeDialogVisible(true)}
+              icon="microphone"
+              disabled={!script.analysis?.characters?.length}
+            >
+              Practice
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => setRecordingsDialogVisible(true)}
+              icon="video"
+            >
+              Recordings
+            </Button>
+          </View>
+          <View style={styles.rightActions}>
+            <IconButton
+              icon="pencil"
+              mode="contained-tonal"
               onPress={handleRename}
-              title="Rename"
-              leadingIcon="text"
             />
-            <Menu.Item 
+            <IconButton
+              icon="delete"
+              mode="contained-tonal"
               onPress={handleDeletePress}
-              title="Delete"
-              leadingIcon="delete"
-              titleStyle={{ color: theme.colors.error }}
+              iconColor={theme.colors.error}
             />
-          </Menu>
+          </View>
         </View>
       </View>
 
       <ScrollView style={styles.content}>
         {script.description && (
           <View style={styles.section}>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
-              Description
-            </Text>
-            <Text variant="bodyMedium" style={styles.description}>
-              {script.description}
-            </Text>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
+                Description
+              </Text>
+            </View>
+            <View style={styles.sectionContent}>
+              <Text style={styles.description}>
+                {script.description}
+              </Text>
+            </View>
           </View>
         )}
 
-        {renderAnalysis()}
-      </ScrollView>
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Script Analysis
+            </Text>
+          </View>
+          <View style={styles.sectionContent}>
+            <View style={styles.metadataRow}>
+              <View style={styles.metadataItem}>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Total Lines</Text>
+                <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
+                  {script.analysis?.metadata.totalLines || 0}
+                </Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Duration</Text>
+                <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
+                  {Math.round(script.analysis?.metadata.estimatedDuration || 0)} min
+                </Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Scenes</Text>
+                <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
+                  {script.analysis?.scenes.length || 0}
+                </Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Characters</Text>
+                <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
+                  {script.analysis?.characters.length || 0}
+                </Text>
+              </View>
+            </View>
 
-      <FAB
-        icon="play"
-        label="Start Practice"
-        style={styles.fab}
-        onPress={handleStartPractice}
-        disabled={!script?.analysis?.characters?.length}
-      />
+            <View style={[styles.characterAnalysis, { marginTop: 16 }]}>
+              <Text variant="titleSmall" style={[styles.subsectionTitle, { marginBottom: 16 }]}>
+                Characters & Voice Assignment
+              </Text>
+              {script.analysis?.characters.map((char) => (
+                <View key={char.name} style={styles.characterRow}>
+                  <View style={styles.characterInfo}>
+                    <Text style={styles.characterName}>{char.name}</Text>
+                    <Text style={styles.characterStats}>
+                      {char.lines} lines {characterVoices[char.name] ? 
+                        `• ${characterVoices[char.name].voice.charAt(0).toUpperCase() + characterVoices[char.name].voice.slice(1)} (${VOICE_INFO[characterVoices[char.name].voice as VoiceOption].gender} | ${getVoiceDescription(characterVoices[char.name].voice as VoiceOption)})` : 
+                        '• No voice assigned'}
+                    </Text>
+                  </View>
+                  <Button
+                    mode="outlined"
+                    onPress={() => handleAssignVoice(char.name)}
+                    style={styles.voiceButton}
+                  >
+                    {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
+                  </Button>
+                </View>
+              ))}
+            </View>
+          </View>
+        </View>
+      </ScrollView>
 
       <Portal>
         <Dialog visible={deleteDialogVisible} onDismiss={() => setDeleteDialogVisible(false)}>
@@ -710,6 +709,12 @@ const ScriptDetail: React.FC = () => {
             </Button>
           </Dialog.Actions>
         </Dialog>
+
+        <RecordingsDialog
+          visible={recordingsDialogVisible}
+          onDismiss={() => setRecordingsDialogVisible(false)}
+          scriptId={scriptId}
+        />
       </Portal>
 
       {error && (

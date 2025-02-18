@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Platform } from 'react-native';
+import { View, StyleSheet, ScrollView, Platform, PermissionsAndroid, Alert } from 'react-native';
 import { Text, IconButton, useTheme, Button, Portal, Dialog, MD3Theme, RadioButton, ActivityIndicator, TextInput } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
@@ -8,6 +8,7 @@ import { Script, ScriptCharacter } from '../../types/script';
 import firebaseService from '../../services/firebase';
 import { useFocusEffect } from '@react-navigation/native';
 import { Camera, useCameraDevice, useCameraPermission, CameraPosition, CameraRuntimeError, CameraCaptureError, CameraDeviceFormat } from 'react-native-vision-camera';
+import RNFS from 'react-native-fs';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
 
@@ -227,6 +228,8 @@ const PracticeScript: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraFormat, setCameraFormat] = useState<CameraDeviceFormat | null>(null);
+  const [micPermission, setMicPermission] = useState(false);
+  const [savedVideoPath, setSavedVideoPath] = useState<string | null>(null);
   const camera = useRef<Camera>(null);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
@@ -319,25 +322,32 @@ const PracticeScript: React.FC = () => {
 
   useEffect(() => {
     if (device?.formats) {
-      // Find the highest quality format that supports video
+      // Filter for formats that support video recording with common resolutions
       const videoFormats = device.formats.filter(f => {
-        // Check if the format supports video recording
-        return f.photoHeight && f.photoWidth && f.videoHeight && f.videoWidth;
-      });
-      const sortedFormats = videoFormats.sort((a, b) => {
-        // Sort by resolution (width * height)
-        const aRes = a.videoWidth * a.videoHeight;
-        const bRes = b.videoWidth * b.videoHeight;
-        return bRes - aRes;
+        // Check for standard video resolutions (1080p or 720p)
+        const isStandardResolution = (
+          (f.videoWidth === 1920 && f.videoHeight === 1080) ||
+          (f.videoWidth === 1280 && f.videoHeight === 720)
+        );
+        return f.videoHeight && f.videoWidth && isStandardResolution;
       });
 
-      // Select the highest quality format
-      const bestFormat = sortedFormats[0];
+      // Prefer 1080p, fallback to 720p, then any available format
+      let bestFormat = videoFormats.find(f => f.videoHeight === 1080);
+      if (!bestFormat) {
+        bestFormat = videoFormats.find(f => f.videoHeight === 720);
+      }
+      if (!bestFormat && device.formats.length > 0) {
+        // Fallback to first available format
+        bestFormat = device.formats[0];
+      }
+
       if (bestFormat) {
         console.log('Selected camera format:', {
           width: bestFormat.videoWidth,
           height: bestFormat.videoHeight,
           fps: bestFormat.maxFps,
+          pixelFormats: bestFormat.pixelFormats,
         });
         setCameraFormat(bestFormat);
       }
@@ -345,11 +355,35 @@ const PracticeScript: React.FC = () => {
   }, [device]);
 
   const checkPermissions = async () => {
-    if (!cameraPermission) {
-      const newCameraPermission = await requestPermission();
-      setHasPermission(newCameraPermission);
-    } else {
-      setHasPermission(true);
+    try {
+      // Request camera permission
+      if (!cameraPermission) {
+        const newCameraPermission = await requestPermission();
+        setHasPermission(newCameraPermission);
+      } else {
+        setHasPermission(true);
+      }
+
+      // Request microphone permission for Android
+      if (Platform.OS === 'android') {
+        const micResult = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: "Microphone Permission",
+            message: "ScriptCue needs access to your microphone to record video with audio.",
+            buttonNeutral: "Ask Me Later",
+            buttonNegative: "Cancel",
+            buttonPositive: "OK"
+          }
+        );
+        setMicPermission(micResult === PermissionsAndroid.RESULTS.GRANTED);
+      } else {
+        // On iOS, the camera permission includes microphone access
+        setMicPermission(cameraPermission);
+      }
+    } catch (err) {
+      console.error('Error requesting permissions:', err);
+      setError('Failed to get required permissions');
     }
   };
 
@@ -370,9 +404,39 @@ const PracticeScript: React.FC = () => {
     setSettingsVisible(false);
   };
 
+  const saveVideoLocally = async (sourcePath: string) => {
+    try {
+      // Create a directory for practice videos if it doesn't exist
+      const practiceDir = `${RNFS.DocumentDirectoryPath}/practice_videos/${scriptId}`;
+      await RNFS.mkdir(practiceDir, { NSURLIsExcludedFromBackupKey: true });
+
+      // Generate a unique filename with timestamp
+      const timestamp = new Date().getTime();
+      const fileName = `practice_${characterId}_${timestamp}.mp4`;
+      const destinationPath = `${practiceDir}/${fileName}`;
+
+      // Copy the video file to our app's documents directory
+      await RNFS.copyFile(sourcePath, destinationPath);
+      console.log('Video saved locally at:', destinationPath);
+      
+      // Delete the temporary file
+      await RNFS.unlink(sourcePath);
+
+      return destinationPath;
+    } catch (error) {
+      console.error('Error saving video locally:', error);
+      throw error;
+    }
+  };
+
   const handleStartRecording = async () => {
     if (!camera.current) {
       setError('Camera not initialized');
+      return;
+    }
+
+    if (!micPermission) {
+      setError('Microphone permission is required for recording');
       return;
     }
 
@@ -383,29 +447,27 @@ const PracticeScript: React.FC = () => {
       
       await camera.current.startRecording({
         flash: 'off',
+        fileType: 'mp4',
+        videoCodec: 'h264',
         onRecordingFinished: async (video) => {
           console.log('Recording finished:', video);
           try {
             setIsUploading(true);
-            setUploadProgress(0);
             
-            const downloadUrl = await firebaseService.uploadPracticeVideo(
-              scriptId,
-              characterId,
-              video.path,
-              (progress: number) => {
-                setUploadProgress(progress);
-              }
+            const savedPath = await saveVideoLocally(video.path);
+            setSavedVideoPath(savedPath);
+            
+            Alert.alert(
+              'Success',
+              'Video saved successfully!',
+              [{ text: 'OK' }]
             );
             
-            console.log('Video uploaded successfully:', downloadUrl);
             setIsUploading(false);
-            setUploadProgress(0);
-          } catch (uploadError) {
-            console.error('Error uploading video:', uploadError);
-            setError('Failed to upload video. Please try again.');
+          } catch (error) {
+            console.error('Error saving video:', error);
+            setError('Failed to save video. Please try again.');
             setIsUploading(false);
-            setUploadProgress(0);
           }
         },
         onRecordingError: (error: CameraCaptureError) => {
@@ -454,11 +516,11 @@ const PracticeScript: React.FC = () => {
     );
   }
 
-  if (!device || !hasPermission) {
+  if (!device || !hasPermission || !micPermission) {
     return (
       <View style={[styles.container, styles.loadingContainer]}>
-        <Text>No camera available or permission denied</Text>
-        <Button onPress={checkPermissions}>Request Permission</Button>
+        <Text>Camera and/or microphone permission required</Text>
+        <Button onPress={checkPermissions}>Request Permissions</Button>
       </View>
     );
   }
@@ -475,8 +537,7 @@ const PracticeScript: React.FC = () => {
         video={true}
         audio={true}
         format={cameraFormat || undefined}
-        fps={cameraFormat?.maxFps}
-        lowLightBoost={device?.supportsLowLightBoost}
+        fps={30}
         enableZoomGesture={true}
         orientation="portrait"
         onError={(error) => {
@@ -494,7 +555,7 @@ const PracticeScript: React.FC = () => {
         <View style={styles.uploadingIndicator}>
           <ActivityIndicator size="small" color={theme.colors.primary} />
           <Text style={styles.uploadingText}>
-            Uploading video... {uploadProgress.toFixed(0)}%
+            Saving video...
           </Text>
         </View>
       )}

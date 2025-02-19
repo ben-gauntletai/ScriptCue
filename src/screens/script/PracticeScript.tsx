@@ -9,8 +9,17 @@ import firebaseService from '../../services/firebase';
 import { useFocusEffect } from '@react-navigation/native';
 import { Camera, useCameraDevice, useCameraPermission, CameraPosition, CameraRuntimeError, CameraCaptureError, CameraDeviceFormat } from 'react-native-vision-camera';
 import RNFS from 'react-native-fs';
+import Sound from 'react-native-sound';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
+
+type VoiceOption = 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'onyx' | 'nova' | 'sage' | 'shimmer';
+
+interface DialogueLine {
+  text: string;
+  lineNumber: number;
+  voices?: Record<string, string>;
+}
 
 interface DialogueItem {
   characterId: string;
@@ -20,12 +29,10 @@ interface DialogueItem {
   isUser: boolean;
 }
 
-type VoiceOption = 'alloy' | 'ash' | 'coral' | 'echo' | 'fable' | 'onyx' | 'nova' | 'sage' | 'shimmer';
-
-interface VoiceInfo {
+type VoiceInfo = {
   description: string;
   gender: 'Male' | 'Female';
-}
+};
 
 const VOICE_OPTIONS: VoiceOption[] = ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'];
 
@@ -50,10 +57,7 @@ interface Character {
   name: string;
   lines: number;
   firstAppearance: number;
-  dialogue?: Array<{
-    text: string;
-    lineNumber: number;
-  }>;
+  dialogue?: DialogueLine[];
 }
 
 const createStyles = (theme: MD3Theme) => StyleSheet.create({
@@ -229,6 +233,14 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     textAlign: 'center',
     color: theme.colors.onSurface,
   },
+  dialogueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  playButton: {
+    marginLeft: 8,
+  },
 });
 
 const PracticeScript: React.FC = () => {
@@ -251,6 +263,9 @@ const PracticeScript: React.FC = () => {
   const [savedVideoPath, setSavedVideoPath] = useState<string | null>(null);
   const [isGeneratingVoices, setIsGeneratingVoices] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<string>('');
+  const [showCamera, setShowCamera] = useState(false);
+  const [currentlyPlayingLine, setCurrentlyPlayingLine] = useState<string | null>(null);
+  const [sound, setSound] = useState<Sound | null>(null);
   const camera = useRef<Camera>(null);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
@@ -624,6 +639,59 @@ const PracticeScript: React.FC = () => {
     setCameraPosition(current => current === 'front' ? 'back' : 'front');
   };
 
+  // Add cleanup for sound when component unmounts
+  useEffect(() => {
+    return () => {
+      if (sound) {
+        sound.release();
+      }
+    };
+  }, [sound]);
+
+  const handlePlayVoiceLine = async (lineId: string, voiceUrl: string) => {
+    try {
+      // Stop any currently playing sound
+      if (sound) {
+        sound.stop();
+        sound.release();
+      }
+
+      setCurrentlyPlayingLine(lineId);
+
+      // Create and play the new sound
+      const newSound = new Sound(voiceUrl, '', (error) => {
+        if (error) {
+          console.error('Error loading sound:', error);
+          setError('Failed to load audio');
+          setCurrentlyPlayingLine(null);
+          return;
+        }
+
+        newSound.play((success) => {
+          if (!success) {
+            console.error('Sound playback failed');
+            setError('Failed to play audio');
+          }
+          setCurrentlyPlayingLine(null);
+          newSound.release();
+        });
+      });
+
+      setSound(newSound);
+    } catch (error) {
+      console.error('Error playing voice line:', error);
+      setError('Failed to play voice line');
+      setCurrentlyPlayingLine(null);
+    }
+  };
+
+  const toggleCamera = () => {
+    setShowCamera(!showCamera);
+    if (isRecording) {
+      handleStopRecording();
+    }
+  };
+
   if (!script || !currentCharacter) {
     return (
       <View style={[styles.container, styles.loadingContainer]}>
@@ -644,30 +712,31 @@ const PracticeScript: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <Camera
-        ref={camera}
-        style={[styles.camera, {
-          aspectRatio: cameraFormat ? cameraFormat.videoWidth / cameraFormat.videoHeight : 16/9
-        }]}
-        device={device}
-        isActive={true}
-        video={true}
-        audio={true}
-        format={cameraFormat || undefined}
-        fps={30}
-        enableZoomGesture={true}
-        orientation="portrait"
-        onError={(error) => {
-          console.error('Camera error:', error);
-          if (error.message.includes('camera-has-been-disconnected') || 
-              error.message.includes('Camera disabled by policy')) {
-            // Camera not ready or disabled, attempt to reinitialize
-            checkPermissions();
-          } else {
-            setCameraError(`Camera error: ${error.message}`);
-          }
-        }}
-      />
+      {showCamera && (
+        <Camera
+          ref={camera}
+          style={[styles.camera, {
+            aspectRatio: cameraFormat ? cameraFormat.videoWidth / cameraFormat.videoHeight : 16/9
+          }]}
+          device={device}
+          isActive={true}
+          video={true}
+          audio={true}
+          format={cameraFormat || undefined}
+          fps={30}
+          enableZoomGesture={true}
+          orientation="portrait"
+          onError={(error) => {
+            console.error('Camera error:', error);
+            if (error.message.includes('camera-has-been-disconnected') || 
+                error.message.includes('Camera disabled by policy')) {
+              checkPermissions();
+            } else {
+              setCameraError(`Camera error: ${error.message}`);
+            }
+          }}
+        />
+      )}
       {isVideoRecording && (
         <View style={styles.recordingIndicator}>
           <ActivityIndicator size="small" color={theme.colors.onError} />
@@ -696,19 +765,29 @@ const PracticeScript: React.FC = () => {
         </View>
       )}
       <View style={styles.controlsRow}>
-        <IconButton
-          icon="camera-flip"
-          size={24}
-          onPress={toggleCameraPosition}
-          disabled={isRecording || isUploading}
-        />
+        <Button
+          mode="contained"
+          onPress={toggleCamera}
+          icon="camera"
+          disabled={isUploading || !!cameraError}
+        >
+          Toggle
+        </Button>
+        {showCamera && (
+          <IconButton
+            icon="camera-flip"
+            size={24}
+            onPress={toggleCameraPosition}
+            disabled={isRecording || isUploading}
+          />
+        )}
         <Button
           mode="contained"
           onPress={isRecording ? handleStopRecording : handleStartRecording}
-          icon={isRecording ? "stop" : "video"}
+          icon={isRecording ? "stop" : "play"}
           disabled={isUploading || !!cameraError}
         >
-          {isRecording ? "Stop Recording" : "Start Recording"}
+          {isRecording ? "Stop" : "Rehearse"}
         </Button>
       </View>
       <ScrollView style={styles.content}>
@@ -726,7 +805,39 @@ const PracticeScript: React.FC = () => {
                 index === currentLineIndex && styles.currentLine
               ]}>
                 <Text style={styles.characterName}>{item.characterName}</Text>
-                <Text style={styles.dialogueText}>{item.text}</Text>
+                <View style={styles.dialogueRow}>
+                  <Text style={styles.dialogueText}>{item.text}</Text>
+                  {!item.isUser && characterVoices[item.characterName] && (
+                    <IconButton
+                      icon={currentlyPlayingLine === `${scriptId}_${item.characterName}_${item.lineNumber}` ? "stop" : "play"}
+                      size={20}
+                      mode="contained-tonal"
+                      onPress={() => {
+                        const lineId = `${scriptId}_${item.characterName}_${item.lineNumber}`;
+                        const voiceId = characterVoices[item.characterName].voice;
+                        // Find the voice URL from the script's analysis
+                        const character = script?.analysis?.characters.find(c => c.name === item.characterName);
+                        const line = character?.dialogue?.find(d => d.lineNumber === item.lineNumber);
+                        const voiceUrl = line?.voices?.[voiceId];
+                        
+                        if (voiceUrl) {
+                          if (currentlyPlayingLine === lineId) {
+                            // Stop playing
+                            if (sound) {
+                              sound.stop();
+                              sound.release();
+                              setSound(null);
+                            }
+                            setCurrentlyPlayingLine(null);
+                          } else {
+                            handlePlayVoiceLine(lineId, voiceUrl);
+                          }
+                        }
+                      }}
+                      style={styles.playButton}
+                    />
+                  )}
+                </View>
               </View>
             </View>
           ))}

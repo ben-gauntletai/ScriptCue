@@ -268,8 +268,12 @@ export const generateVoiceLines = onCall({
     }
 
     console.log(`Found ${scriptData.analysis.characters.length} characters in script`);
-    const characters = [...scriptData.analysis.characters]; // Create a copy to preserve original array
-    const characterUpdates = [];
+    const characters = scriptData.analysis.characters;
+    const updatedCharacters = [...characters]; // Create a copy of the characters array
+
+    // Log initial character count and names
+    console.log('Initial characters:', characters.map((c: Character) => c.name));
+    const initialCharacterCount = characters.length;
 
     // Process each character except the practicing one
     for (const character of characters) {
@@ -297,6 +301,10 @@ export const generateVoiceLines = onCall({
       });
 
       stats.totalLines += character.dialogue.length;
+
+      // Find the character in our copy of the array
+      const characterIndex = updatedCharacters.findIndex(c => c.name === character.name);
+      if (characterIndex === -1) continue;
 
       // Process each line of dialogue
       for (let dialogueIndex = 0; dialogueIndex < character.dialogue.length; dialogueIndex++) {
@@ -367,8 +375,8 @@ export const generateVoiceLines = onCall({
             expires: '3000-01-01'
           });
 
-          // Update the dialogue line with the voice URL
-          character.dialogue[dialogueIndex] = {
+          // Update the dialogue line with the voice URL in our copy
+          updatedCharacters[characterIndex].dialogue[dialogueIndex] = {
             ...line,
             voices: {
               ...(line.voices || {}),
@@ -400,38 +408,37 @@ export const generateVoiceLines = onCall({
           continue;
         }
       }
-
-      // Prepare the update for this character
-      const characterIndex = characters.findIndex((c: { name: string }) => c.name === character.name);
-      if (characterIndex !== -1) {
-        characterUpdates.push({
-          [`analysis.characters`]: characters
-        });
-      }
     }
 
-    // Update the entire characters array in a single update
+    // Apply the update to the entire characters array in a single operation
     if (stats.successfulLines > 0) {
-      let updateSuccess = false;
-      let updateAttempts = 0;
-      const maxUpdateAttempts = 3;
-
-      while (!updateSuccess && updateAttempts < maxUpdateAttempts) {
-        try {
-          await scriptDoc.ref.update({
-            'analysis.characters': characters
-          });
-          updateSuccess = true;
-          console.log('Successfully updated all character dialogue with voice URLs while preserving all characters');
-        } catch (updateError) {
-          updateAttempts++;
-          console.error(`Update attempt ${updateAttempts} failed:`, updateError);
-          if (updateAttempts === maxUpdateAttempts) {
-            throw new HttpsError('data-loss', 'Failed to save voice line updates after multiple attempts');
-          }
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, 1000 * updateAttempts));
+      try {
+        // Validate that we haven't lost any characters
+        console.log('Final characters:', updatedCharacters.map(c => c.name));
+        if (updatedCharacters.length !== initialCharacterCount) {
+          const error = `Character count mismatch: started with ${initialCharacterCount}, ended with ${updatedCharacters.length}`;
+          console.error(error);
+          throw new HttpsError('internal', error);
         }
+
+        // Verify all original characters are still present
+        const missingCharacters = characters
+          .filter((original: Character) => !updatedCharacters.some((updated: Character) => updated.name === original.name))
+          .map((c: Character) => c.name);
+        
+        if (missingCharacters.length > 0) {
+          const error = `Missing characters in final update: ${missingCharacters.join(', ')}`;
+          console.error(error);
+          throw new HttpsError('internal', error);
+        }
+
+        await scriptDoc.ref.update({
+          'analysis.characters': updatedCharacters
+        });
+        console.log('Successfully updated all character dialogue with voice URLs');
+      } catch (updateError) {
+        console.error('Error updating character dialogue:', updateError);
+        throw new HttpsError('data-loss', 'Failed to save voice line updates');
       }
     }
 

@@ -298,42 +298,63 @@ const PracticeScript: React.FC = () => {
                 scriptData?.analysis?.characters.some(c => c.name === charName) // Ensure character exists
               );
 
-              const needsVoiceGeneration = charactersNeedingVoices.length > 0 && (
-                !existingVoiceLines || // No voice lines exist yet
-                charactersNeedingVoices.some(charName => {
+              // Only check for voice generation if we have characters with voice settings
+              if (charactersNeedingVoices.length > 0) {
+                console.log('Checking voice generation needs for characters:', charactersNeedingVoices);
+                
+                // First check if we have any voice lines at all
+                let needsGeneration = false;
+                
+                // Then check each character's lines
+                for (const charName of charactersNeedingVoices) {
                   const character = scriptData?.analysis?.characters.find(c => c.name === charName);
-                  if (!character) return false;
+                  if (!character?.dialogue?.length) continue; // Skip if no dialogue
 
-                  // Check each line of the character
-                  return (character.dialogue || []).some(line => {
+                  // Check if any line is missing its voice
+                  for (const line of character.dialogue) {
                     const lineId = `${scriptId}_${charName}_${line.lineNumber}`;
                     const currentVoice = savedVoices[charName].voice;
                     
-                    // Need generation if:
-                    // 1. No audio exists for this line, or
-                    // 2. No audio exists for the current voice setting
-                    return !existingVoiceLines[lineId] || 
-                           !existingVoiceLines[lineId].some(url => 
-                             url.includes(`${lineId}_${currentVoice}.mp3`));
-                  });
-                })
-              );
+                    // If we find any line missing its voice, we need generation
+                    if (!existingVoiceLines?.[lineId]?.some(url => 
+                      url.includes(`${lineId}_${currentVoice}.mp3`)
+                    )) {
+                      needsGeneration = true;
+                      break;
+                    }
+                  }
+                  if (needsGeneration) break;
+                }
 
-              if (needsVoiceGeneration) {
-                setIsGeneratingVoices(true);
-                setGenerationProgress('Generating Voices...');
-                console.log('Generating voice lines for characters:', charactersNeedingVoices);
-                try {
-                  await firebaseService.generateVoiceLines(
-                    scriptId,
-                    characterId,
-                    savedVoices
-                  );
-                  setIsGeneratingVoices(false);
-                } catch (error) {
-                  console.error('Error generating voice lines:', error);
-                  setError('Failed to generate voice lines. Some characters may not have audio.');
-                  setIsGeneratingVoices(false);
+                if (needsGeneration) {
+                  // Verify we have all the required data before showing the popup
+                  const canGenerateVoices = charactersNeedingVoices.every(charName => {
+                    const character = scriptData?.analysis?.characters.find(c => c.name === charName);
+                    return character?.dialogue?.length && savedVoices[charName]?.voice;
+                  });
+
+                  if (canGenerateVoices) {
+                    console.log('Starting voice generation for characters:', charactersNeedingVoices);
+                    try {
+                      setIsGeneratingVoices(true);
+                      setGenerationProgress('Generating Voices...');
+                      await firebaseService.generateVoiceLines(
+                        scriptId,
+                        characterId,
+                        savedVoices
+                      );
+                    } catch (error) {
+                      console.error('Error generating voice lines:', error);
+                      setError('Failed to generate voice lines. Some characters may not have audio.');
+                    } finally {
+                      setIsGeneratingVoices(false);
+                    }
+                  } else {
+                    console.log('Missing required data for voice generation');
+                    setError('Some characters are missing required data for voice generation.');
+                  }
+                } else {
+                  console.log('All voice lines are already generated');
                 }
               }
             }

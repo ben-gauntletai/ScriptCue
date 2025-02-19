@@ -19,9 +19,9 @@ import { writeFileSync } from 'fs';
 import { defineSecret } from 'firebase-functions/params';
 
 // Add these interfaces at the top of the file after imports
-export interface DialogueLine {
-  lineNumber: number;
+interface DialogueLine {
   text: string;
+  lineNumber: number;
   voices?: Record<string, string>;
 }
 
@@ -258,186 +258,147 @@ export const generateVoiceLines = onCall({
 
     console.log('Script document found, checking for analysis data...');
     const scriptData = scriptDoc.data();
-    if (!scriptData?.analysis?.characters) {
+    if (!scriptData?.analysis?.processedLines) {
       console.error('Script data invalid. Structure:', JSON.stringify({
         hasScriptData: !!scriptData,
         hasAnalysis: !!scriptData?.analysis,
-        hasCharacters: !!scriptData?.analysis?.characters
+        hasProcessedLines: !!scriptData?.analysis?.processedLines
       }));
-      throw new HttpsError('failed-precondition', 'Script is missing analysis or character data');
+      throw new HttpsError('failed-precondition', 'Script is missing analysis or processed lines data');
     }
 
-    console.log(`Found ${scriptData.analysis.characters.length} characters in script`);
-    const characters = scriptData.analysis.characters;
-    const updatedCharacters = [...characters]; // Create a copy of the characters array
+    console.log(`Found ${scriptData.analysis.processedLines.length} processed lines in script`);
+    const processedLines = scriptData.analysis.processedLines;
+    const updatedProcessedLines = [...processedLines];
 
-    // Log initial character count and names
-    console.log('Initial characters:', characters.map((c: Character) => c.name));
-    const initialCharacterCount = characters.length;
-
-    // Process each character except the practicing one
-    for (const character of characters) {
-      if (character.name === practiceCharacter) {
-        console.log(`Skipping practice character: ${character.name}`);
+    // Process each line except action lines and practicing character's lines
+    for (let i = 0; i < processedLines.length; i++) {
+      const line = processedLines[i];
+      
+      // Skip action lines and practicing character's lines
+      if (line.isAction || line.characterName === practiceCharacter) {
+        console.log(`Skipping line: ${line.isAction ? 'action line' : 'practice character line'}`);
         continue;
       }
 
-      const characterVoice = characterVoices[character.name];
+      const characterVoice = characterVoices[line.characterName];
       if (!characterVoice?.voice) {
-        console.log(`Skipping character with no voice settings: ${character.name}`);
+        console.log(`Skipping line with no voice settings for character: ${line.characterName}`);
         continue;
       }
 
-      if (!Array.isArray(character.dialogue)) {
-        const error = `No dialogue array found for character: ${character.name}`;
-        console.log(error);
-        stats.errors.push(error);
-        continue;
-      }
-
-      console.log(`Processing voice lines for character: ${character.name}`, {
+      stats.totalLines++;
+      console.log(`Processing voice line for character: ${line.characterName}`, {
         voice: characterVoice.voice,
-        numberOfLines: character.dialogue.length
+        lineNumber: line.originalLineNumber,
+        sequentialNumber: line.sequentialNumber
       });
 
-      stats.totalLines += character.dialogue.length;
-
-      // Find the character in our copy of the array
-      const characterIndex = updatedCharacters.findIndex(c => c.name === character.name);
-      if (characterIndex === -1) continue;
-
-      // Process each line of dialogue
-      for (let dialogueIndex = 0; dialogueIndex < character.dialogue.length; dialogueIndex++) {
-        const line = character.dialogue[dialogueIndex];
-        if (!line || !line.text || typeof line.lineNumber !== 'number') {
-          const error = `Invalid dialogue line for ${character.name} at index ${dialogueIndex}`;
-          console.log(error);
-          stats.errors.push(error);
-          stats.failedLines++;
+      const fileName = `scripts/${scriptId}/analysis/${line.characterName}/voices/${characterVoice.voice}/${scriptId}_${line.characterName}_${line.originalLineNumber}_${characterVoice.voice}.mp3`;
+      
+      try {
+        // Check if file already exists
+        const fileExists = await bucket.file(fileName).exists();
+        if (fileExists[0]) {
+          console.log(`Audio file already exists for line ${line.originalLineNumber}, skipping generation`);
+          stats.successfulLines++;
           continue;
         }
 
-        const fileName = `scripts/${scriptId}/analysis/${character.name}/voices/${characterVoice.voice}/${scriptId}_${character.name}_${line.lineNumber}_${characterVoice.voice}.mp3`;
+        // Generate speech using OpenAI
+        const response = await openai.audio.speech.create({
+          model: "tts-1",
+          voice: characterVoice.voice,
+          input: line.text,
+        });
+
+        // Get the audio data
+        const audioData = await response.arrayBuffer();
+        console.log(`Generated audio data for line ${line.originalLineNumber}, size: ${audioData.byteLength} bytes`);
+
+        // Upload to Firebase Storage with retry logic
+        const file = bucket.file(fileName);
+        let uploadSuccess = false;
+        let uploadAttempts = 0;
+        const maxUploadAttempts = 3;
+
+        while (!uploadSuccess && uploadAttempts < maxUploadAttempts) {
+          try {
+            await file.save(Buffer.from(audioData), {
+              metadata: {
+                contentType: 'audio/mpeg',
+                metadata: {
+                  scriptId,
+                  characterName: line.characterName,
+                  lineNumber: line.originalLineNumber,
+                  voice: characterVoice.voice
+                }
+              }
+            });
+            uploadSuccess = true;
+          } catch (uploadError) {
+            uploadAttempts++;
+            if (uploadAttempts === maxUploadAttempts) {
+              throw uploadError;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000 * uploadAttempts));
+          }
+        }
+
+        // Get the download URL
+        const [url] = await file.getSignedUrl({
+          action: 'read',
+          expires: '3000-01-01'
+        });
+
+        // Update the line with the voice URL
+        updatedProcessedLines[i] = {
+          ...line,
+          voices: {
+            ...(line.voices || {}),
+            [characterVoice.voice]: url
+          }
+        };
+
+        stats.successfulLines++;
+        console.log(`Added voice URL for line ${line.originalLineNumber}, voice ${characterVoice.voice}`);
+      } catch (error) {
+        stats.failedLines++;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Error generating audio for line ${line.originalLineNumber}:`, error);
         
-        try {
-          // Check if file already exists
-          const fileExists = await bucket.file(fileName).exists();
-          if (fileExists[0]) {
-            console.log(`Audio file already exists for line ${line.lineNumber}, skipping generation`);
-            stats.successfulLines++;
+        if (error instanceof Error) {
+          if (error.message.includes('rate limit')) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
             continue;
           }
-
-          // Generate speech using OpenAI
-          const response = await openai.audio.speech.create({
-            model: "tts-1",
-            voice: characterVoice.voice,
-            input: line.text,
-          });
-
-          // Get the audio data
-          const audioData = await response.arrayBuffer();
-          console.log(`Generated audio data for line ${line.lineNumber}, size: ${audioData.byteLength} bytes`);
-
-          // Upload to Firebase Storage with retry logic
-          const file = bucket.file(fileName);
-          let uploadSuccess = false;
-          let uploadAttempts = 0;
-          const maxUploadAttempts = 3;
-
-          while (!uploadSuccess && uploadAttempts < maxUploadAttempts) {
-            try {
-              await file.save(Buffer.from(audioData), {
-                metadata: {
-                  contentType: 'audio/mpeg',
-                  metadata: {
-                    scriptId,
-                    characterName: character.name,
-                    lineNumber: line.lineNumber,
-                    voice: characterVoice.voice
-                  }
-                }
-              });
-              uploadSuccess = true;
-            } catch (uploadError) {
-              uploadAttempts++;
-              if (uploadAttempts === maxUploadAttempts) {
-                throw uploadError;
-              }
-              // Wait before retrying
-              await new Promise(resolve => setTimeout(resolve, 1000 * uploadAttempts));
-            }
+          if (error.message.includes('API key')) {
+            throw new HttpsError('unauthenticated', 'Authentication failed with voice service. Please try again later.');
           }
-
-          // Get the download URL
-          const [url] = await file.getSignedUrl({
-            action: 'read',
-            expires: '3000-01-01'
-          });
-
-          // Update the dialogue line with the voice URL in our copy
-          updatedCharacters[characterIndex].dialogue[dialogueIndex] = {
-            ...line,
-            voices: {
-              ...(line.voices || {}),
-              [characterVoice.voice]: url
-            }
-          };
-
-          stats.successfulLines++;
-          console.log(`Added voice URL for line ${line.lineNumber}, voice ${characterVoice.voice}`);
-        } catch (error) {
-          stats.failedLines++;
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`Error generating audio for line ${line.lineNumber}:`, error);
-          
-          // Handle specific error types
-          if (error instanceof Error) {
-            if (error.message.includes('rate limit')) {
-              // Wait and retry for rate limits
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              dialogueIndex--; // Retry this line
-              continue;
-            }
-            if (error.message.includes('API key')) {
-              throw new HttpsError('unauthenticated', 'Authentication failed with voice service. Please try again later.');
-            }
-          }
-          
-          stats.errors.push(`Failed to generate audio for ${character.name}, line ${line.lineNumber}: ${errorMessage}`);
-          continue;
         }
+        
+        stats.errors.push(`Failed to generate audio for ${line.characterName}, line ${line.originalLineNumber}: ${errorMessage}`);
+        continue;
       }
     }
 
-    // Apply the update to the entire characters array in a single operation
+    // Apply the update to the processedLines array in a single operation
     if (stats.successfulLines > 0) {
       try {
-        // Validate that we haven't lost any characters
-        console.log('Final characters:', updatedCharacters.map(c => c.name));
-        if (updatedCharacters.length !== initialCharacterCount) {
-          const error = `Character count mismatch: started with ${initialCharacterCount}, ended with ${updatedCharacters.length}`;
-          console.error(error);
-          throw new HttpsError('internal', error);
-        }
-
-        // Verify all original characters are still present
-        const missingCharacters = characters
-          .filter((original: Character) => !updatedCharacters.some((updated: Character) => updated.name === original.name))
-          .map((c: Character) => c.name);
-        
-        if (missingCharacters.length > 0) {
-          const error = `Missing characters in final update: ${missingCharacters.join(', ')}`;
+        // Validate that we haven't lost any lines
+        console.log('Final processed lines count:', updatedProcessedLines.length);
+        if (updatedProcessedLines.length !== processedLines.length) {
+          const error = `Processed lines count mismatch: started with ${processedLines.length}, ended with ${updatedProcessedLines.length}`;
           console.error(error);
           throw new HttpsError('internal', error);
         }
 
         await scriptDoc.ref.update({
-          'analysis.characters': updatedCharacters
+          'analysis.processedLines': updatedProcessedLines
         });
-        console.log('Successfully updated all character dialogue with voice URLs');
+        console.log('Successfully updated all processed lines with voice URLs');
       } catch (updateError) {
-        console.error('Error updating character dialogue:', updateError);
+        console.error('Error updating processed lines:', updateError);
         throw new HttpsError('data-loss', 'Failed to save voice line updates');
       }
     }
@@ -450,14 +411,11 @@ export const generateVoiceLines = onCall({
 
     // Collect all generated audio URLs
     const audioFiles: Record<string, string[]> = {};
-    characters.forEach((character: { name: string; dialogue?: Array<{ voices?: Record<string, string>; lineNumber: number }> }) => {
-      if (character.name === practiceCharacter) return;
-      character.dialogue?.forEach(line => {
-        if (line.voices) {
-          const lineId = `${scriptId}_${character.name}_${line.lineNumber}`;
-          audioFiles[lineId] = Object.values(line.voices);
-        }
-      });
+    updatedProcessedLines.forEach(line => {
+      if (line.voices && !line.isAction && line.characterName !== practiceCharacter) {
+        const lineId = `${scriptId}_${line.characterName}_${line.originalLineNumber}`;
+        audioFiles[lineId] = Object.values(line.voices);
+      }
     });
 
     return {

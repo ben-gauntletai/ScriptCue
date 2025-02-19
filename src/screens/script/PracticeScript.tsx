@@ -27,6 +27,9 @@ interface DialogueItem {
   text: string;
   lineNumber: number;
   isUser: boolean;
+  isMultiLine?: boolean;
+  continuationOf?: number;
+  isAction?: boolean;
 }
 
 type VoiceInfo = {
@@ -241,6 +244,21 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   playButton: {
     marginLeft: 8,
   },
+  actionLine: {
+    backgroundColor: theme.colors.surfaceVariant,
+    borderRadius: 4,
+    padding: 8,
+    marginVertical: 8,
+    fontStyle: 'italic',
+  },
+  actionText: {
+    color: theme.colors.onSurfaceVariant,
+    fontStyle: 'italic',
+  },
+  continuedDialogue: {
+    marginTop: 4,
+    marginLeft: 16,
+  },
 });
 
 const PracticeScript: React.FC = () => {
@@ -328,41 +346,29 @@ const PracticeScript: React.FC = () => {
                 // Skip practicing character
                 if (charName === characterId) continue;
 
-                // Find character in script
-                const character: Character | undefined = scriptData?.analysis?.characters.find((c: Character) => c.name === charName);
-                if (!character?.dialogue?.length || !savedVoices[charName]?.voice) {
+                // Find all processed lines for this character
+                const characterLines = scriptData?.analysis?.processedLines?.filter(
+                  pl => pl.characterName === charName && !pl.isAction
+                );
+
+                if (!characterLines?.length || !savedVoices[charName]?.voice) {
                   console.log(`Skipping character ${charName}: no dialogue or voice settings`);
                   continue;
                 }
 
+                hasValidCharacters = true;
+
                 // Check if any line needs voice generation
-                for (const line of character.dialogue) {
-                  const lineId = `${scriptId}_${charName}_${line.lineNumber}`;
+                for (const line of characterLines) {
                   const currentVoice = savedVoices[charName].voice;
-                  
-                  console.log('Checking voice line:', {
-                    lineId,
-                    currentVoice,
-                    hasExistingVoiceLines: !!existingVoiceLines,
-                    hasLineId: existingVoiceLines ? !!existingVoiceLines[lineId] : false,
-                    urls: existingVoiceLines?.[lineId] || [],
-                    expectedFile: `${lineId}_${currentVoice}.mp3`
-                  });
-                  
-                  if (!existingVoiceLines || 
-                      !existingVoiceLines[lineId] ||
-                      !existingVoiceLines[lineId].some(url => url.includes(`${lineId}_${currentVoice}.mp3`))
-                  ) {
-                    console.log(`Found missing voice line for ${charName}, line ${line.lineNumber}`, {
-                      reason: !existingVoiceLines 
-                        ? 'No existing voice lines at all'
-                        : !existingVoiceLines[lineId]
-                          ? 'No voice lines for this line ID'
-                          : 'Voice file with current voice not found'
+                  if (!line.voices || !line.voices[currentVoice]) {
+                    console.log(`Found missing voice line for ${charName}, line ${line.originalLineNumber}`, {
+                      reason: !line.voices 
+                        ? 'No voices object'
+                        : 'Voice file with current voice not found'
                     });
                     charactersNeedingGeneration.push(charName);
                     needsGeneration = true;
-                    hasValidCharacters = true;
                     break;
                   }
                 }
@@ -395,25 +401,43 @@ const PracticeScript: React.FC = () => {
               }
             }
 
-            // Organize dialogue in sequential order
-            const allDialogue: DialogueItem[] = [];
+            // Organize dialogue and action lines in sequential order
+            const allLines: DialogueItem[] = [];
+            
+            // Add action lines
+            if (scriptData.analysis.actionLines) {
+              scriptData.analysis.actionLines.forEach((action) => {
+                allLines.push({
+                  characterId: 'ACTION',
+                  characterName: 'ACTION',
+                  text: action.text,
+                  lineNumber: action.lineNumber,
+                  isUser: false,
+                  isAction: true,
+                });
+              });
+            }
+
+            // Add dialogue lines
             scriptData.analysis.characters.forEach((char) => {
               if (char.dialogue && char.dialogue.length > 0) {
                 char.dialogue.forEach((line) => {
-                  allDialogue.push({
+                  allLines.push({
                     characterId: char.name,
                     characterName: char.name,
                     text: line.text,
                     lineNumber: line.lineNumber,
                     isUser: char.name === characterId,
+                    isMultiLine: line.isMultiLine,
+                    continuationOf: line.continuationOf,
                   });
                 });
               }
             });
 
-            // Sort dialogue by line number
-            allDialogue.sort((a, b) => a.lineNumber - b.lineNumber);
-            setDialogue(allDialogue);
+            // Sort all lines by line number
+            allLines.sort((a, b) => a.lineNumber - b.lineNumber);
+            setDialogue(allLines);
           } else {
             setError('Character not found in script');
           }
@@ -792,55 +816,86 @@ const PracticeScript: React.FC = () => {
       </View>
       <ScrollView style={styles.content}>
         <View style={styles.dialogueContainer}>
-          {dialogue.map((item, index) => (
-            <View
-              key={`${item.characterId}-${item.lineNumber}`}
-              style={styles.dialogueLine}
-            >
-              <View style={styles.lineNumberContainer}>
-                <Text style={styles.lineNumber}>{index + 1}</Text>
-              </View>
-              <View style={[
-                styles.dialogueContent,
-                index === currentLineIndex && styles.currentLine
-              ]}>
-                <Text style={styles.characterName}>{item.characterName}</Text>
-                <View style={styles.dialogueRow}>
-                  <Text style={styles.dialogueText}>{item.text}</Text>
-                  {!item.isUser && characterVoices[item.characterName] && (
-                    <IconButton
-                      icon={currentlyPlayingLine === `${scriptId}_${item.characterName}_${item.lineNumber}` ? "stop" : "play"}
-                      size={20}
-                      mode="contained-tonal"
-                      onPress={() => {
-                        const lineId = `${scriptId}_${item.characterName}_${item.lineNumber}`;
-                        const voiceId = characterVoices[item.characterName].voice;
-                        // Find the voice URL from the script's analysis
-                        const character = script?.analysis?.characters.find(c => c.name === item.characterName);
-                        const line = character?.dialogue?.find(d => d.lineNumber === item.lineNumber);
-                        const voiceUrl = line?.voices?.[voiceId];
-                        
-                        if (voiceUrl) {
-                          if (currentlyPlayingLine === lineId) {
-                            // Stop playing
-                            if (sound) {
-                              sound.stop();
-                              sound.release();
-                              setSound(null);
+          {dialogue.map((item, index) => {
+            // Skip continued lines as they'll be shown with their parent
+            if (item.continuationOf) {
+              return null;
+            }
+
+            // Find any continuation lines
+            const continuedLines = dialogue.filter(
+              line => line.continuationOf === item.lineNumber
+            );
+
+            // Calculate the actual sequential line number
+            // Filter out continuation lines that come before this line
+            const sequentialNumber = dialogue
+              .slice(0, index)
+              .filter(line => !line.continuationOf)
+              .length + 1;
+
+            // Combine the text of the main line with any continuation lines
+            const fullText = [item.text, ...continuedLines.map(line => line.text)].join(' ');
+
+            return (
+              <View
+                key={`${item.characterId}-${item.lineNumber}`}
+                style={styles.dialogueLine}
+              >
+                <View style={styles.lineNumberContainer}>
+                  <Text style={styles.lineNumber}>{sequentialNumber}</Text>
+                </View>
+                <View style={[
+                  styles.dialogueContent,
+                  index === currentLineIndex && styles.currentLine,
+                  item.isAction && styles.actionLine
+                ]}>
+                  {!item.isAction && <Text style={styles.characterName}>{item.characterName}</Text>}
+                  <View style={styles.dialogueRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[
+                        styles.dialogueText,
+                        item.isAction && styles.actionText
+                      ]}>
+                        {fullText}
+                      </Text>
+                    </View>
+                    {!item.isAction && !item.isUser && characterVoices[item.characterName] &&
+                      <IconButton
+                        icon={currentlyPlayingLine === `${scriptId}_${item.characterName}_${item.lineNumber}` ? "stop" : "play"}
+                        size={20}
+                        mode="contained-tonal"
+                        onPress={() => {
+                          const lineId = `${scriptId}_${item.characterName}_${item.lineNumber}`;
+                          const voiceId = characterVoices[item.characterName].voice;
+                          // Find the line in processedLines instead of character dialogue
+                          const processedLine = script?.analysis?.processedLines?.find(
+                            (pl: { characterName: string; originalLineNumber: number }) => 
+                              pl.characterName === item.characterName && pl.originalLineNumber === item.lineNumber
+                          );
+                          const voiceUrl = processedLine?.voices?.[voiceId];
+                          
+                          if (voiceUrl) {
+                            if (currentlyPlayingLine === lineId) {
+                              if (sound) {
+                                sound.stop();
+                                sound.release();
+                                setSound(null);
+                              }
+                              setCurrentlyPlayingLine(null);
+                            } else {
+                              handlePlayVoiceLine(lineId, voiceUrl);
                             }
-                            setCurrentlyPlayingLine(null);
-                          } else {
-                            handlePlayVoiceLine(lineId, voiceUrl);
                           }
-                        }
-                      }}
-                      style={styles.playButton}
-                    />
-                  )}
+                        }}
+                        style={styles.playButton}
+                      />
+                    }
+                  </View>
                 </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </View>
       </ScrollView>
 

@@ -67,6 +67,9 @@ export interface ScriptAnalysis {
     dialogue?: Array<{
       text: string;
       lineNumber: number;
+      isMultiLine?: boolean;
+      continuationOf?: number;
+      voices?: Record<string, string>;
     }>;
   }>;
   scenes: Array<{
@@ -75,6 +78,20 @@ export interface ScriptAnalysis {
     endLine: number;
     location?: string;
     timeOfDay?: string;
+  }>;
+  actionLines: Array<{
+    text: string;
+    lineNumber: number;
+  }>;
+  processedLines: Array<{
+    characterId: string;
+    characterName: string;
+    text: string;
+    originalLineNumber: number;
+    sequentialNumber: number;
+    isUser?: boolean;
+    isAction?: boolean;
+    voices?: Record<string, string>;
   }>;
   metadata: {
     totalLines: number;

@@ -804,15 +804,29 @@ class FirebaseService {
       const doc = await firestore()
         .collection('scripts')
         .doc(scriptId)
-        .collection('voiceLines')
-        .doc('audioFiles')
         .get();
 
       if (!doc.exists) {
         return null;
       }
 
-      return doc.data() as Record<string, string[]>;
+      const data = doc.data();
+      if (!data?.analysis?.characters) {
+        return null;
+      }
+
+      // Collect all voice URLs from the characters' dialogue
+      const audioFiles: Record<string, string[]> = {};
+      data.analysis.characters.forEach((character: { name: string; dialogue?: Array<{ voices?: Record<string, string>; lineNumber: number }> }) => {
+        character.dialogue?.forEach(line => {
+          if (line.voices) {
+            const lineId = `${scriptId}_${character.name}_${line.lineNumber}`;
+            audioFiles[lineId] = Object.values(line.voices);
+          }
+        });
+      });
+
+      return audioFiles;
     } catch (error) {
       console.error('Error getting voice lines:', error);
       throw this.handleFirestoreError(error);

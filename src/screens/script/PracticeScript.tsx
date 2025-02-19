@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Platform, PermissionsAndroid, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, Platform, PermissionsAndroid, Alert, AppState } from 'react-native';
 import { Text, IconButton, useTheme, Button, Portal, Dialog, MD3Theme, RadioButton, ActivityIndicator, TextInput } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
@@ -44,6 +44,16 @@ const VOICE_INFO: Record<VoiceOption, VoiceInfo> = {
 interface VoiceSettings {
   voice: VoiceOption;
   testText: string;
+}
+
+interface Character {
+  name: string;
+  lines: number;
+  firstAppearance: number;
+  dialogue?: Array<{
+    text: string;
+    lineNumber: number;
+  }>;
 }
 
 const createStyles = (theme: MD3Theme) => StyleSheet.create({
@@ -244,6 +254,7 @@ const PracticeScript: React.FC = () => {
   const camera = useRef<Camera>(null);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
+  const appState = useRef(AppState.currentState);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<PracticeScriptRouteProp>();
@@ -272,7 +283,7 @@ const PracticeScript: React.FC = () => {
         const scriptData = await firebaseService.getScript(scriptId);
         if (scriptData && scriptData.analysis) {
           setScript(scriptData);
-          const character = scriptData.analysis.characters.find((c) => c.name === characterId);
+          const character = scriptData.analysis.characters.find((c: Character) => c.name === characterId);
           if (character) {
             setCurrentCharacter({
               id: character.name,
@@ -292,70 +303,80 @@ const PracticeScript: React.FC = () => {
               // Check if we need to generate voice lines
               const existingVoiceLines = await firebaseService.getVoiceLines(scriptId);
               
-              // Get all non-practicing characters that have voice settings
-              const charactersNeedingVoices = Object.keys(savedVoices).filter(charName => 
-                charName !== characterId && // Skip practicing character
-                scriptData?.analysis?.characters.some(c => c.name === charName) // Ensure character exists
-              );
+              // First check which characters actually need voice generation
+              let needsGeneration = false;
+              let hasValidCharacters = false;
+              let charactersNeedingGeneration: string[] = [];
 
-              // Only check for voice generation if we have characters with voice settings
-              if (charactersNeedingVoices.length > 0) {
-                console.log('Checking voice generation needs for characters:', charactersNeedingVoices);
-                
-                // First check if we have any voice lines at all
-                let needsGeneration = false;
-                
-                // Then check each character's lines
-                for (const charName of charactersNeedingVoices) {
-                  const character = scriptData?.analysis?.characters.find(c => c.name === charName);
-                  if (!character?.dialogue?.length) continue; // Skip if no dialogue
+              // Check each character with voice settings
+              for (const charName of Object.keys(savedVoices)) {
+                // Skip practicing character
+                if (charName === characterId) continue;
 
-                  // Check if any line is missing its voice
-                  for (const line of character.dialogue) {
-                    const lineId = `${scriptId}_${charName}_${line.lineNumber}`;
-                    const currentVoice = savedVoices[charName].voice;
-                    
-                    // If we find any line missing its voice, we need generation
-                    if (!existingVoiceLines?.[lineId]?.some(url => 
-                      url.includes(`${lineId}_${currentVoice}.mp3`)
-                    )) {
-                      needsGeneration = true;
-                      break;
-                    }
-                  }
-                  if (needsGeneration) break;
+                // Find character in script
+                const character: Character | undefined = scriptData?.analysis?.characters.find((c: Character) => c.name === charName);
+                if (!character?.dialogue?.length || !savedVoices[charName]?.voice) {
+                  console.log(`Skipping character ${charName}: no dialogue or voice settings`);
+                  continue;
                 }
 
-                if (needsGeneration) {
-                  // Verify we have all the required data before showing the popup
-                  const canGenerateVoices = charactersNeedingVoices.every(charName => {
-                    const character = scriptData?.analysis?.characters.find(c => c.name === charName);
-                    return character?.dialogue?.length && savedVoices[charName]?.voice;
+                // Check if any line needs voice generation
+                for (const line of character.dialogue) {
+                  const lineId = `${scriptId}_${charName}_${line.lineNumber}`;
+                  const currentVoice = savedVoices[charName].voice;
+                  
+                  console.log('Checking voice line:', {
+                    lineId,
+                    currentVoice,
+                    hasExistingVoiceLines: !!existingVoiceLines,
+                    hasLineId: existingVoiceLines ? !!existingVoiceLines[lineId] : false,
+                    urls: existingVoiceLines?.[lineId] || [],
+                    expectedFile: `${lineId}_${currentVoice}.mp3`
                   });
-
-                  if (canGenerateVoices) {
-                    console.log('Starting voice generation for characters:', charactersNeedingVoices);
-                    try {
-                      setIsGeneratingVoices(true);
-                      setGenerationProgress('Generating Voices...');
-                      await firebaseService.generateVoiceLines(
-                        scriptId,
-                        characterId,
-                        savedVoices
-                      );
-                    } catch (error) {
-                      console.error('Error generating voice lines:', error);
-                      setError('Failed to generate voice lines. Some characters may not have audio.');
-                    } finally {
-                      setIsGeneratingVoices(false);
-                    }
-                  } else {
-                    console.log('Missing required data for voice generation');
-                    setError('Some characters are missing required data for voice generation.');
+                  
+                  if (!existingVoiceLines || 
+                      !existingVoiceLines[lineId] ||
+                      !existingVoiceLines[lineId].some(url => url.includes(`${lineId}_${currentVoice}.mp3`))
+                  ) {
+                    console.log(`Found missing voice line for ${charName}, line ${line.lineNumber}`, {
+                      reason: !existingVoiceLines 
+                        ? 'No existing voice lines at all'
+                        : !existingVoiceLines[lineId]
+                          ? 'No voice lines for this line ID'
+                          : 'Voice file with current voice not found'
+                    });
+                    charactersNeedingGeneration.push(charName);
+                    needsGeneration = true;
+                    hasValidCharacters = true;
+                    break;
                   }
-                } else {
-                  console.log('All voice lines are already generated');
                 }
+              }
+
+              // Only proceed if we actually found characters needing generation
+              if (charactersNeedingGeneration.length > 0 && hasValidCharacters && needsGeneration) {
+                console.log('Starting voice generation for characters:', charactersNeedingGeneration);
+                try {
+                  setIsGeneratingVoices(true);
+                  setGenerationProgress('Generating Voices...');
+                  await firebaseService.generateVoiceLines(
+                    scriptId,
+                    characterId,
+                    savedVoices
+                  );
+                } catch (error) {
+                  console.error('Error generating voice lines:', error);
+                  setError('Failed to generate voice lines. Some characters may not have audio.');
+                } finally {
+                  setIsGeneratingVoices(false);
+                }
+              } else {
+                console.log('No voice generation needed:', {
+                  charactersChecked: Object.keys(savedVoices).length,
+                  charactersNeedingGeneration: charactersNeedingGeneration.length,
+                  hasValidCharacters,
+                  needsGeneration
+                });
               }
             }
 
@@ -430,6 +451,25 @@ const PracticeScript: React.FC = () => {
       }
     }
   }, [device]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (
+        appState.current.match(/inactive|background/) &&
+        nextAppState === 'active'
+      ) {
+        // App has come to foreground
+        console.log('App has come to foreground, reinitializing camera...');
+        checkPermissions();
+        setCameraError(null);
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const checkPermissions = async () => {
     try {
@@ -619,7 +659,13 @@ const PracticeScript: React.FC = () => {
         orientation="portrait"
         onError={(error) => {
           console.error('Camera error:', error);
-          setCameraError(`Camera error: ${error.message}`);
+          if (error.message.includes('camera-has-been-disconnected') || 
+              error.message.includes('Camera disabled by policy')) {
+            // Camera not ready or disabled, attempt to reinitialize
+            checkPermissions();
+          } else {
+            setCameraError(`Camera error: ${error.message}`);
+          }
         }}
       />
       {isVideoRecording && (

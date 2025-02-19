@@ -10,6 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Camera, useCameraDevice, useCameraPermission, CameraPosition, CameraRuntimeError, CameraCaptureError, CameraDeviceFormat } from 'react-native-vision-camera';
 import RNFS from 'react-native-fs';
 import Sound from 'react-native-sound';
+import Voice from '@react-native-voice/voice';
 
 type PracticeScriptRouteProp = RouteProp<MainStackParamList, 'PracticeScript'>;
 
@@ -270,6 +271,7 @@ const PracticeScript: React.FC = () => {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [characterVoices, setCharacterVoices] = useState<Record<string, VoiceSettings>>({});
+  const characterVoicesRef = useRef<Record<string, VoiceSettings>>({});
   const [hasPermission, setHasPermission] = useState(false);
   const [cameraPosition, setCameraPosition] = useState<CameraPosition>('front');
   const [isVideoRecording, setIsVideoRecording] = useState(false);
@@ -284,10 +286,38 @@ const PracticeScript: React.FC = () => {
   const [showCamera, setShowCamera] = useState(false);
   const [currentlyPlayingLine, setCurrentlyPlayingLine] = useState<string | null>(null);
   const [sound, setSound] = useState<Sound | null>(null);
+  const [isRehearsing, setIsRehearsing] = useState(false);
+  const [currentPlayingIndex, setCurrentPlayingIndex] = useState<number | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [silenceTimer, setSilenceTimer] = useState<NodeJS.Timeout | null>(null);
+  const [lastSpeechTime, setLastSpeechTime] = useState<number | null>(null);
+  const [isLineInProgress, setIsLineInProgress] = useState(false);
+  const [partialResults, setPartialResults] = useState<string[]>([]);
+  const [confidenceThreshold] = useState(0.7);
+  const [recognitionTimeout, setRecognitionTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [intentionalStop, setIntentionalStop] = useState(false);
+  const intentionalStopRef = useRef(false);
+  const errorInProgress = useRef(false);
+  const MAX_RETRIES = 3;
+  const SILENCE_THRESHOLD = 2000; // 2 seconds of silence
+  const RECOGNITION_TIMEOUT = 10000; // 10 seconds max for recognition
   const camera = useRef<Camera>(null);
+  const dialogueRef = useRef<DialogueItem[]>([]);
+  const currentIndexRef = useRef<number | null>(null);
+  const soundRef = useRef<Sound | null>(null);
+  const isRehearsingRef = useRef(false);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
   const appState = useRef(AppState.currentState);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const voiceInitialized = useRef(false);
+  const currentRecognitionStart = useRef<number | null>(null);
+  const [silenceHandlingInProgress, setSilenceHandlingInProgress] = useState(false);
+  const silenceHandlingRef = useRef(false);
+  const lastSilenceTime = useRef<number | null>(null);
+  const SILENCE_DEBOUNCE = 1000; // Minimum time between silence detections
+  const processedLinesRef = useRef<any[]>([]);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<PracticeScriptRouteProp>();
@@ -315,6 +345,16 @@ const PracticeScript: React.FC = () => {
       try {
         const scriptData = await firebaseService.getScript(scriptId);
         if (scriptData && scriptData.analysis) {
+          console.log('Loaded script analysis:', {
+            hasProcessedLines: !!scriptData.analysis.processedLines,
+            processedLinesCount: scriptData.analysis.processedLines?.length,
+            characterCount: scriptData.analysis.characters?.length,
+            characters: scriptData.analysis.characters?.map(c => c.name)
+          });
+          
+          // Store processed lines in ref
+          processedLinesRef.current = scriptData.analysis.processedLines || [];
+          
           setScript(scriptData);
           const character = scriptData.analysis.characters.find((c: Character) => c.name === characterId);
           if (character) {
@@ -331,7 +371,10 @@ const PracticeScript: React.FC = () => {
             // Load saved voice settings if they exist
             const savedVoices = await firebaseService.getCharacterVoices(scriptId);
             if (savedVoices) {
-              setCharacterVoices(savedVoices as Record<string, VoiceSettings>);
+              console.log('Loaded voice settings:', savedVoices);
+              const typedVoices = savedVoices as Record<string, VoiceSettings>;
+              setCharacterVoices(typedVoices);
+              characterVoicesRef.current = typedVoices;
 
               // Check if we need to generate voice lines
               const existingVoiceLines = await firebaseService.getVoiceLines(scriptId);
@@ -663,49 +706,354 @@ const PracticeScript: React.FC = () => {
     setCameraPosition(current => current === 'front' ? 'back' : 'front');
   };
 
-  // Add cleanup for sound when component unmounts
+  // Update dialogue ref when dialogue state changes
   useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.release();
+    dialogueRef.current = dialogue;
+  }, [dialogue]);
+
+  // Update characterVoicesRef when characterVoices changes
+  useEffect(() => {
+    characterVoicesRef.current = characterVoices;
+  }, [characterVoices]);
+
+  // Add a new function to centralize state management
+  const resetSpeechState = () => {
+    setIsListening(false);
+    setRetryCount(0);
+    intentionalStopRef.current = false;
+    setPartialResults([]);
+  };
+
+  // Add a function to ensure rehearsal state is valid
+  const ensureRehearsalState = () => {
+    if (!isRehearsingRef.current || !dialogueRef.current.length) {
+      handleStopRehearsal();
+      return false;
+    }
+    return true;
+  };
+
+  // Improved speech recognition handlers
+  useEffect(() => {
+    let isMounted = true;
+    
+    const initialize = async () => {
+      if (voiceInitialized.current) return;
+      
+      try {
+        Sound.setCategory('Playback');
+        
+        const available = await Voice.isAvailable();
+        if (!available) {
+          throw new Error('Voice recognition not available');
+        }
+        
+        Voice.onSpeechStart = () => {
+          if (!isMounted) return;
+          console.log('Speech started');
+          setIsListening(true);
+        };
+
+        Voice.onSpeechEnd = () => {
+          if (!isMounted) return;
+          console.log('Speech ended');
+          // Don't change state here, wait for results or error
+        };
+
+        Voice.onSpeechResults = async (result: { value: string[] }) => {
+          if (!isMounted) return;
+          console.log('Final results:', result.value);
+          
+          try {
+            // First stop listening
+            await stopListening();
+            
+            // Ensure we're still in a valid state
+            if (!ensureRehearsalState()) return;
+            
+            // Move to next line
+            await playNextLine();
+          } catch (error) {
+            console.error('Error in speech results:', error);
+            // Even if error occurs, try to continue
+            if (ensureRehearsalState()) {
+              await playNextLine();
+            }
+          }
+        };
+
+        Voice.onSpeechError = async (error: { error: string }) => {
+          if (!isMounted) return;
+          console.log('Speech recognition error:', error);
+
+          try {
+            // If we're intentionally stopping, just clean up
+            if (intentionalStopRef.current) {
+              resetSpeechState();
+              return;
+            }
+
+            // If we're not rehearsing, just clean up
+            if (!ensureRehearsalState()) {
+              resetSpeechState();
+              return;
+            }
+
+            // Handle retries
+            if (retryCount < MAX_RETRIES) {
+              console.log('Retrying recognition...');
+              setRetryCount(prev => prev + 1);
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await startListening();
+            } else {
+              console.log('Max retries reached, moving to next line');
+              resetSpeechState();
+              await playNextLine();
+            }
+          } catch (error) {
+            console.error('Error handling speech error:', error);
+            // If all else fails, try to continue
+            if (ensureRehearsalState()) {
+              resetSpeechState();
+              await playNextLine();
+            }
+          }
+        };
+
+        voiceInitialized.current = true;
+        console.log('Voice recognition initialized successfully');
+      } catch (error) {
+        console.error('Initialization error:', error);
+        setError('Failed to initialize audio and speech. Please restart the app.');
       }
     };
-  }, [sound]);
 
-  const handlePlayVoiceLine = async (lineId: string, voiceUrl: string) => {
-    try {
-      // Stop any currently playing sound
-      if (sound) {
-        sound.stop();
-        sound.release();
+    initialize();
+    
+    return () => {
+      isMounted = false;
+      if (soundRef.current) {
+        soundRef.current.release();
       }
+      resetSpeechState();
+      stopListening();
+    };
+  }, []);
 
-      setCurrentlyPlayingLine(lineId);
+  // Improved start listening
+  const startListening = async () => {
+    try {
+      console.log('Starting listening...');
+      
+      // First ensure we're in a valid state
+      if (!ensureRehearsalState()) return;
+      
+      // Stop any existing listening
+      await stopListening();
+      
+      // Reset state before starting
+      resetSpeechState();
+      
+      // Start recognition
+      await Voice.start('en-US');
+      setIsListening(true);
+    } catch (error) {
+      console.error('Error starting voice recognition:', error);
+      // On error, reset state and try to continue
+      resetSpeechState();
+      if (ensureRehearsalState()) {
+        await playNextLine();
+      }
+    }
+  };
 
-      // Create and play the new sound
-      const newSound = new Sound(voiceUrl, '', (error) => {
-        if (error) {
-          console.error('Error loading sound:', error);
-          setError('Failed to load audio');
-          setCurrentlyPlayingLine(null);
+  // Improved stop listening
+  const stopListening = async () => {
+    try {
+      console.log('Stopping listening...');
+      
+      // Set flag before stopping to prevent error handling
+      intentionalStopRef.current = true;
+      
+      // Stop recognition
+      await Voice.stop();
+      
+      // Small delay to ensure stop completes
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      console.error('Error stopping voice recognition:', error);
+    } finally {
+      // Always reset state
+      resetSpeechState();
+    }
+  };
+
+  // Simplified playNextLine
+  const playNextLine = async () => {
+    console.log('Playing next line');
+
+    if (!isRehearsingRef.current) {
+      console.log('Not rehearsing, stopping');
+      handleStopRehearsal();
+      return;
+    }
+
+    const nextIndex = currentIndexRef.current === null ? 0 : currentIndexRef.current + 1;
+    
+    if (nextIndex >= dialogueRef.current.length) {
+      console.log('End of script reached');
+      handleStopRehearsal();
+      return;
+    }
+
+    currentIndexRef.current = nextIndex;
+    setCurrentPlayingIndex(nextIndex);
+    setCurrentLineIndex(nextIndex);
+    scrollToLine(nextIndex);
+
+    const currentLine = dialogueRef.current[nextIndex];
+    console.log('Current line:', {
+      index: nextIndex,
+      characterName: currentLine.characterName,
+      lineNumber: currentLine.lineNumber,
+      isAction: currentLine.isAction,
+      isUser: currentLine.isUser,
+      text: currentLine.text
+    });
+    
+    try {
+      if (currentLine.isAction) {
+        console.log('Processing action line, pausing briefly');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (isRehearsingRef.current) {
+          await playNextLine();
+        }
+      } else if (currentLine.isUser || currentLine.characterName === characterId) {
+        console.log('Processing user line, starting voice recognition');
+        await startListening();
+      } else {
+        console.log('Processing AI line, checking voice settings');
+        const lineId = `${scriptId}_${currentLine.characterName}_${currentLine.lineNumber}`;
+        const characterVoiceSettings = characterVoicesRef.current[currentLine.characterName];
+        
+        console.log('Voice settings:', {
+          characterName: currentLine.characterName,
+          hasSettings: !!characterVoiceSettings,
+          voiceId: characterVoiceSettings?.voice,
+          lineId
+        });
+
+        if (!characterVoiceSettings?.voice) {
+          console.log('No voice settings found for character:', currentLine.characterName);
+          await playNextLine();
           return;
         }
 
-        newSound.play((success) => {
-          if (!success) {
-            console.error('Sound playback failed');
-            setError('Failed to play audio');
-          }
-          setCurrentlyPlayingLine(null);
-          newSound.release();
-        });
-      });
+        const voiceUrl = getVoiceLineUrl(currentLine.characterName, currentLine.lineNumber, characterVoiceSettings.voice);
 
-      setSound(newSound);
+        if (!voiceUrl) {
+          console.log('No voice URL found for line:', {
+            lineId,
+            characterName: currentLine.characterName,
+            lineNumber: currentLine.lineNumber,
+            voiceId: characterVoiceSettings.voice
+          });
+          await playNextLine();
+          return;
+        }
+
+        try {
+          console.log('Playing voice line:', {
+            lineId,
+            voiceUrl
+          });
+          await playVoiceLine(lineId, voiceUrl);
+          if (isRehearsingRef.current) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await playNextLine();
+          }
+        } catch (error) {
+          console.error('Error playing voice line:', error);
+          if (isRehearsingRef.current) {
+            await playNextLine();
+          }
+        }
+      }
     } catch (error) {
-      console.error('Error playing voice line:', error);
-      setError('Failed to play voice line');
+      console.error('Error in playNextLine:', error);
+      if (isRehearsingRef.current) {
+        await playNextLine();
+      }
+    }
+  };
+
+  const handleStartRehearsal = async () => {
+    console.log('Starting rehearsal', {
+      availableVoices: Object.keys(characterVoicesRef.current),
+      dialogueLength: dialogueRef.current.length
+    });
+    
+    try {
+      // Reset all state first
+      currentIndexRef.current = null;
+      
+      // Stop any ongoing processes
+      await stopListening();
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      // Ensure clean state
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Set rehearsal state
+      isRehearsingRef.current = true;
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
       setCurrentlyPlayingLine(null);
+      setIsRehearsing(true);
+      
+      // Begin with first line
+      await playNextLine();
+    } catch (error) {
+      console.error('Error starting rehearsal:', error);
+      handleStopRehearsal();
+      setError('Failed to start rehearsal. Please try again.');
+    }
+  };
+
+  const handleStopRehearsal = async () => {
+    console.log('Stopping rehearsal');
+    
+    // Set rehearsal flag first to prevent new operations
+    isRehearsingRef.current = false;
+    
+    try {
+      // Stop all ongoing processes
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      await stopListening();
+      
+      // Reset all state
+      resetSpeechState();
+      currentIndexRef.current = null;
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
+      setCurrentlyPlayingLine(null);
+      setIsRehearsing(false);
+    } catch (error) {
+      console.error('Error stopping rehearsal:', error);
+      // Force reset state even if error occurs
+      setIsRehearsing(false);
+      resetSpeechState();
     }
   };
 
@@ -714,6 +1062,116 @@ const PracticeScript: React.FC = () => {
     if (isRecording) {
       handleStopRecording();
     }
+  };
+
+  // Simple scroll to line function
+  const scrollToLine = (index: number) => {
+    if (scrollViewRef.current && dialogueRef.current[index]) {
+      scrollViewRef.current.scrollTo({
+        y: index * 100,
+        animated: true
+      });
+    }
+  };
+
+  // Update getVoiceLineUrl to use the ref
+  const getVoiceLineUrl = (characterName: string, lineNumber: number, voiceId: VoiceOption): string | null => {
+    console.log('Getting voice URL for:', {
+      characterName,
+      lineNumber,
+      voiceId,
+      isPracticingCharacter: characterName === characterId
+    });
+
+    // Log the entire processedLines array for debugging
+    console.log('All processed lines:', {
+      count: processedLinesRef.current.length,
+      lines: processedLinesRef.current.map(pl => ({
+        characterName: pl.characterName,
+        lineNumber: pl.originalLineNumber,
+        hasVoices: !!pl.voices,
+        text: pl.text
+      }))
+    });
+
+    if (characterName === characterId) {
+      console.log('Skipping voice URL for practicing character');
+      return null;
+    }
+
+    // Try to find the processed line using the ref
+    const processedLine = processedLinesRef.current.find(
+      pl => {
+        const match = pl.characterName === characterName && pl.originalLineNumber === lineNumber;
+        console.log('Checking line:', {
+          checking: {
+            characterName: pl.characterName,
+            lineNumber: pl.originalLineNumber
+          },
+          looking_for: {
+            characterName,
+            lineNumber
+          },
+          isMatch: match
+        });
+        return match;
+      }
+    );
+
+    console.log('Found processed line:', {
+      found: !!processedLine,
+      characterName: processedLine?.characterName,
+      lineNumber: processedLine?.originalLineNumber,
+      hasVoices: !!processedLine?.voices,
+      availableVoices: processedLine?.voices ? Object.keys(processedLine.voices) : [],
+      text: processedLine?.text
+    });
+
+    const voiceUrl = processedLine?.voices?.[voiceId];
+    console.log('Voice URL result:', {
+      hasUrl: !!voiceUrl,
+      voiceId,
+      url: voiceUrl
+    });
+
+    return voiceUrl || null;
+  };
+
+  // Simple play voice line function
+  const playVoiceLine = async (lineId: string, voiceUrl: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Clean up previous sound
+        if (soundRef.current) {
+          soundRef.current.stop();
+          soundRef.current.release();
+          soundRef.current = null;
+        }
+
+        const newSound = new Sound(voiceUrl, '', (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          newSound.play((success) => {
+            if (success) {
+              resolve();
+            } else {
+              reject(new Error('Playback failed'));
+            }
+            
+            // Cleanup
+            newSound.release();
+            soundRef.current = null;
+          });
+          
+          soundRef.current = newSound;
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
   };
 
   if (!script || !currentCharacter) {
@@ -793,7 +1251,7 @@ const PracticeScript: React.FC = () => {
           mode="contained"
           onPress={toggleCamera}
           icon="camera"
-          disabled={isUploading || !!cameraError}
+          disabled={isUploading || !!cameraError || isRehearsing}
         >
           Toggle
         </Button>
@@ -802,34 +1260,37 @@ const PracticeScript: React.FC = () => {
             icon="camera-flip"
             size={24}
             onPress={toggleCameraPosition}
-            disabled={isRecording || isUploading}
+            disabled={isRecording || isUploading || isRehearsing}
           />
         )}
         <Button
           mode="contained"
-          onPress={isRecording ? handleStopRecording : handleStartRecording}
-          icon={isRecording ? "stop" : "play"}
+          onPress={isRehearsing ? handleStopRehearsal : handleStartRehearsal}
+          icon={isRehearsing ? "stop" : "play"}
           disabled={isUploading || !!cameraError}
         >
-          {isRecording ? "Stop" : "Rehearse"}
+          {isRehearsing ? "Stop" : "Rehearse"}
         </Button>
       </View>
-      <ScrollView style={styles.content}>
+      <ScrollView 
+        ref={scrollViewRef}
+        style={styles.content}
+      >
         <View style={styles.dialogueContainer}>
-          {dialogue.map((item, index) => {
+          {dialogueRef.current.map((item, index) => {
             // Skip continued lines as they'll be shown with their parent
             if (item.continuationOf) {
               return null;
             }
 
             // Find any continuation lines
-            const continuedLines = dialogue.filter(
+            const continuedLines = dialogueRef.current.filter(
               line => line.continuationOf === item.lineNumber
             );
 
             // Calculate the actual sequential line number
             // Filter out continuation lines that come before this line
-            const sequentialNumber = dialogue
+            const sequentialNumber = dialogueRef.current
               .slice(0, index)
               .filter(line => !line.continuationOf)
               .length + 1;
@@ -860,16 +1321,16 @@ const PracticeScript: React.FC = () => {
                         {fullText}
                       </Text>
                     </View>
-                    {!item.isAction && !item.isUser && characterVoices[item.characterName] &&
+                    {!item.isAction && !item.isUser && characterVoicesRef.current[item.characterName] &&
                       <IconButton
                         icon={currentlyPlayingLine === `${scriptId}_${item.characterName}_${item.lineNumber}` ? "stop" : "play"}
                         size={20}
                         mode="contained-tonal"
                         onPress={() => {
                           const lineId = `${scriptId}_${item.characterName}_${item.lineNumber}`;
-                          const voiceId = characterVoices[item.characterName].voice;
+                          const voiceId = characterVoicesRef.current[item.characterName].voice;
                           // Find the line in processedLines instead of character dialogue
-                          const processedLine = script?.analysis?.processedLines?.find(
+                          const processedLine = processedLinesRef.current.find(
                             (pl: { characterName: string; originalLineNumber: number }) => 
                               pl.characterName === item.characterName && pl.originalLineNumber === item.lineNumber
                           );
@@ -877,14 +1338,14 @@ const PracticeScript: React.FC = () => {
                           
                           if (voiceUrl) {
                             if (currentlyPlayingLine === lineId) {
-                              if (sound) {
-                                sound.stop();
-                                sound.release();
-                                setSound(null);
+                              if (soundRef.current) {
+                                soundRef.current.stop();
+                                soundRef.current.release();
+                                soundRef.current = null;
                               }
                               setCurrentlyPlayingLine(null);
                             } else {
-                              handlePlayVoiceLine(lineId, voiceUrl);
+                              playVoiceLine(lineId, voiceUrl);
                             }
                           }
                         }}

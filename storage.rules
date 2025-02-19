@@ -7,12 +7,7 @@ service firebase.storage {
     }
     
     // Allow authenticated users to read and write to their own script uploads
-    match /scripts/{userId}/{fileName} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-
-    // Allow script uploads with metadata
-    match /scripts/{userId}/{scriptId}/{fileName} {
+    match /scripts/{userId}/upload/{fileName} {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null 
         && request.auth.uid == userId
@@ -25,6 +20,23 @@ service firebase.storage {
             request.resource.metadata.scriptId is string
           )
         );
+    }
+
+    // Allow access to processed scripts
+    match /scripts/{scriptId}/processed/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null 
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf');
+    }
+
+    // Allow access to voice lines in new structure
+    match /scripts/{scriptId}/analysis/{characterName}/voices/{voiceName}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null 
+        && request.resource.size < 5 * 1024 * 1024 // 5MB max
+        && request.resource.contentType.matches('audio/mpeg')
+        && request.resource.metadata.scriptId is string;
     }
   }
 } 

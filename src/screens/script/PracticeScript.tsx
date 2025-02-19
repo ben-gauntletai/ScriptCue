@@ -210,6 +210,15 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
     flex: 1,
     marginRight: 8,
   },
+  generatingContent: {
+    alignItems: 'center',
+    padding: 16,
+    gap: 16,
+  },
+  generatingText: {
+    textAlign: 'center',
+    color: theme.colors.onSurface,
+  },
 });
 
 const PracticeScript: React.FC = () => {
@@ -230,6 +239,8 @@ const PracticeScript: React.FC = () => {
   const [cameraFormat, setCameraFormat] = useState<CameraDeviceFormat | null>(null);
   const [micPermission, setMicPermission] = useState(false);
   const [savedVideoPath, setSavedVideoPath] = useState<string | null>(null);
+  const [isGeneratingVoices, setIsGeneratingVoices] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<string>('');
   const camera = useRef<Camera>(null);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
@@ -277,6 +288,54 @@ const PracticeScript: React.FC = () => {
             const savedVoices = await firebaseService.getCharacterVoices(scriptId);
             if (savedVoices) {
               setCharacterVoices(savedVoices as Record<string, VoiceSettings>);
+
+              // Check if we need to generate voice lines
+              const existingVoiceLines = await firebaseService.getVoiceLines(scriptId);
+              
+              // Get all non-practicing characters that have voice settings
+              const charactersNeedingVoices = Object.keys(savedVoices).filter(charName => 
+                charName !== characterId && // Skip practicing character
+                scriptData?.analysis?.characters.some(c => c.name === charName) // Ensure character exists
+              );
+
+              const needsVoiceGeneration = charactersNeedingVoices.length > 0 && (
+                !existingVoiceLines || // No voice lines exist yet
+                charactersNeedingVoices.some(charName => {
+                  const character = scriptData?.analysis?.characters.find(c => c.name === charName);
+                  if (!character) return false;
+
+                  // Check each line of the character
+                  return (character.dialogue || []).some(line => {
+                    const lineId = `${scriptId}_${charName}_${line.lineNumber}`;
+                    const currentVoice = savedVoices[charName].voice;
+                    
+                    // Need generation if:
+                    // 1. No audio exists for this line, or
+                    // 2. No audio exists for the current voice setting
+                    return !existingVoiceLines[lineId] || 
+                           !existingVoiceLines[lineId].some(url => 
+                             url.includes(`${lineId}_${currentVoice}.mp3`));
+                  });
+                })
+              );
+
+              if (needsVoiceGeneration) {
+                setIsGeneratingVoices(true);
+                setGenerationProgress('Generating Voices...');
+                console.log('Generating voice lines for characters:', charactersNeedingVoices);
+                try {
+                  await firebaseService.generateVoiceLines(
+                    scriptId,
+                    characterId,
+                    savedVoices
+                  );
+                  setIsGeneratingVoices(false);
+                } catch (error) {
+                  console.error('Error generating voice lines:', error);
+                  setError('Failed to generate voice lines. Some characters may not have audio.');
+                  setIsGeneratingVoices(false);
+                }
+              }
             }
 
             // Organize dialogue in sequential order
@@ -294,13 +353,10 @@ const PracticeScript: React.FC = () => {
                 });
               }
             });
-            // Sort by line number
+
+            // Sort dialogue by line number
             allDialogue.sort((a, b) => a.lineNumber - b.lineNumber);
-            if (allDialogue.length === 0) {
-              setError('No dialogue found in the script');
-            } else {
-              setDialogue(allDialogue);
-            }
+            setDialogue(allDialogue);
           } else {
             setError('Character not found in script');
           }
@@ -649,6 +705,15 @@ const PracticeScript: React.FC = () => {
               Close
             </Button>
           </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={isGeneratingVoices} dismissable={false}>
+          <Dialog.Content>
+            <View style={styles.generatingContent}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={styles.generatingText}>{generationProgress}</Text>
+            </View>
+          </Dialog.Content>
         </Dialog>
       </Portal>
     </View>

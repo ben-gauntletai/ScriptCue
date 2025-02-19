@@ -7,7 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Script, ScriptScene, ScriptCharacter, ProcessingStatus } from '../../types/script';
 import firebaseService from '../../services/firebase';
-import { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 import Sound from 'react-native-sound';
 import RecordingsDialog from './components/RecordingsDialog';
 
@@ -253,10 +253,11 @@ const ScriptDetail: React.FC = () => {
       if (!user || !scriptId) return;
 
       try {
-        // Subscribe to script document
-        unsubscribe = firebaseService.scriptListener(
-          scriptId,
-          async (doc: FirebaseFirestoreTypes.DocumentSnapshot) => {
+        // Subscribe to script document and voice settings
+        unsubscribe = firestore()
+          .collection('scripts')
+          .doc(scriptId)
+          .onSnapshot(async (doc: FirebaseFirestoreTypes.DocumentSnapshot) => {
             if (doc.exists && doc.data()?.userId === user.uid) {
               const data = doc.data();
               setScript({
@@ -264,18 +265,25 @@ const ScriptDetail: React.FC = () => {
                 ...data,
               } as Script);
 
-              // Fetch script content if processing is completed
+              // Fetch script content and voice settings if processing is completed
               if (data?.uploadStatus === 'completed') {
                 try {
+                  // Load voice settings from subcollection
+                  const voicesDoc = await firestore()
+                    .collection('scripts')
+                    .doc(scriptId)
+                    .collection('settings')
+                    .doc('voices')
+                    .get();
+                    
+                  if (voicesDoc.exists) {
+                    setCharacterVoices(voicesDoc.data() as Record<string, VoiceSettings>);
+                  }
+
+                  // Load script analysis
                   const analysis = await firebaseService.getScriptAnalysis(doc.id);
                   if (analysis?.content) {
                     setScriptContent(analysis.content);
-                  }
-                  
-                  // Load saved voice settings
-                  const savedVoices = await firebaseService.getCharacterVoices(doc.id);
-                  if (savedVoices) {
-                    setCharacterVoices(savedVoices);
                   }
                 } catch (error) {
                   console.error('Error fetching script data:', error);
@@ -289,8 +297,7 @@ const ScriptDetail: React.FC = () => {
           (error: Error) => {
             console.error('Error listening to script:', error);
             setLoading(false);
-          }
-        );
+          });
       } catch (error: any) {
         console.error('Error setting up listeners:', error);
         setLoading(false);
@@ -386,21 +393,29 @@ const ScriptDetail: React.FC = () => {
   };
 
   const handleSaveVoiceSettings = async () => {
-    if (!selectedCharacterForVoice) return;
+    if (!selectedCharacterForVoice || !scriptId) return;
     
     try {
       const updatedVoices = {
         ...characterVoices,
         [selectedCharacterForVoice]: {
           voice: selectedVoice,
-          testText: testText
+          testText: testText || `This is a test of the ${selectedVoice} voice.`
         }
       };
       
-      await firebaseService.saveCharacterVoices(scriptId, updatedVoices);
+      // Save to the voices subcollection
+      await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .collection('settings')
+        .doc('voices')
+        .set(updatedVoices, { merge: true });
+
       setCharacterVoices(updatedVoices);
       setVoiceSettingsVisible(false);
       setSelectedCharacterForVoice(null);
+      setTestText('');
     } catch (error) {
       console.error('Error saving voice settings:', error);
       setVoiceTestError('Failed to save voice settings. Please try again.');
@@ -534,53 +549,55 @@ const ScriptDetail: React.FC = () => {
               <View style={styles.metadataItem}>
                 <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Total Lines</Text>
                 <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
-                  {script.analysis?.metadata.totalLines || 0}
+                  {script.analysis?.metadata?.totalLines || 0}
                 </Text>
               </View>
               <View style={styles.metadataItem}>
                 <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Duration</Text>
                 <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
-                  {Math.round(script.analysis?.metadata.estimatedDuration || 0)} min
+                  {Math.round(script.analysis?.metadata?.estimatedDuration || 0)} min
                 </Text>
               </View>
               <View style={styles.metadataItem}>
                 <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Scenes</Text>
                 <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
-                  {script.analysis?.scenes.length || 0}
+                  {script.analysis?.scenes?.length || 0}
                 </Text>
               </View>
               <View style={styles.metadataItem}>
                 <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Characters</Text>
                 <Text variant="titleLarge" style={{ color: theme.colors.onSurface }}>
-                  {script.analysis?.characters.length || 0}
+                  {script.analysis?.characters?.length || 0}
                 </Text>
               </View>
             </View>
 
-            <View style={[styles.characterAnalysis, { marginTop: 16 }]}>
-              <Text variant="titleSmall" style={[styles.subsectionTitle, { marginBottom: 16 }]}>
-                Characters & Voice Assignment
-              </Text>
-              {script.analysis?.characters.map((char) => (
-                <View key={char.name} style={styles.characterRow}>
-                  <View style={styles.characterInfo}>
-                    <Text style={styles.characterName}>{char.name}</Text>
-                    <Text style={styles.characterStats}>
-                      {char.lines} lines {characterVoices[char.name] ? 
-                        `• ${characterVoices[char.name].voice.charAt(0).toUpperCase() + characterVoices[char.name].voice.slice(1)} (${VOICE_INFO[characterVoices[char.name].voice as VoiceOption].gender} | ${getVoiceDescription(characterVoices[char.name].voice as VoiceOption)})` : 
-                        '• No voice assigned'}
-                    </Text>
+            {script.analysis?.characters && script.analysis.characters.length > 0 && (
+              <View style={[styles.characterAnalysis, { marginTop: 16 }]}>
+                <Text variant="titleSmall" style={[styles.subsectionTitle, { marginBottom: 16 }]}>
+                  Characters & Voice Assignment
+                </Text>
+                {script.analysis.characters.map((char) => (
+                  <View key={char.name} style={styles.characterRow}>
+                    <View style={styles.characterInfo}>
+                      <Text style={styles.characterName}>{char.name}</Text>
+                      <Text style={styles.characterStats}>
+                        {char.lines || 0} lines {characterVoices[char.name] ? 
+                          `• ${characterVoices[char.name]?.voice?.charAt(0).toUpperCase()}${characterVoices[char.name]?.voice?.slice(1) || ''} (${VOICE_INFO[characterVoices[char.name]?.voice as VoiceOption]?.gender || 'Unknown'} | ${getVoiceDescription(characterVoices[char.name]?.voice as VoiceOption)})` : 
+                          '• No voice assigned'}
+                      </Text>
+                    </View>
+                    <Button
+                      mode="outlined"
+                      onPress={() => handleAssignVoice(char.name)}
+                      style={styles.voiceButton}
+                    >
+                      {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
+                    </Button>
                   </View>
-                  <Button
-                    mode="outlined"
-                    onPress={() => handleAssignVoice(char.name)}
-                    style={styles.voiceButton}
-                  >
-                    {characterVoices[char.name] ? 'Change Voice' : 'Assign Voice'}
-                  </Button>
-                </View>
-              ))}
-            </View>
+                ))}
+              </View>
+            )}
           </View>
         </View>
       </ScrollView>

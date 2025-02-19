@@ -368,7 +368,7 @@ class FirebaseService {
       console.log('Initial script document created');
 
       // Construct the storage path
-      const storagePath = `scripts/${userId}/${scriptId}/${fileName}`;
+      const storagePath = `scripts/${userId}/upload/${fileName}`;
       console.log('Storage path:', storagePath);
       const reference = storage().ref(storagePath);
 
@@ -770,6 +770,52 @@ class FirebaseService {
     } catch (error: any) {
       console.error('Error uploading practice video:', error);
       throw this.handleStorageError(error);
+    }
+  }
+
+  async generateVoiceLines(
+    scriptId: string,
+    practiceCharacter: string,
+    characterVoices: Record<string, CharacterVoiceSettings>
+  ): Promise<Record<string, string[]>> {
+    try {
+      console.log('Starting voice line generation for script:', scriptId);
+      
+      const generateVoiceLinesFn = functions().httpsCallable('generateVoiceLines');
+      const result = await generateVoiceLinesFn({
+        scriptId,
+        practiceCharacter,
+        characterVoices
+      });
+
+      if (!result.data?.audioFiles) {
+        throw new Error('No audio files generated');
+      }
+
+      return result.data.audioFiles;
+    } catch (error) {
+      console.error('Error generating voice lines:', error);
+      throw this.handleFirestoreError(error);
+    }
+  }
+
+  async getVoiceLines(scriptId: string): Promise<Record<string, string[]> | null> {
+    try {
+      const doc = await firestore()
+        .collection('scripts')
+        .doc(scriptId)
+        .collection('voiceLines')
+        .doc('audioFiles')
+        .get();
+
+      if (!doc.exists) {
+        return null;
+      }
+
+      return doc.data() as Record<string, string[]>;
+    } catch (error) {
+      console.error('Error getting voice lines:', error);
+      throw this.handleFirestoreError(error);
     }
   }
 }

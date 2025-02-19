@@ -59,6 +59,7 @@ const ScriptsOverview = () => {
               const data = doc.data();
               const script: Script = {
                 id: doc.id,
+                userId: data.userId || user.uid,
                 title: data.title || '',
                 description: data.description || null,
                 status: data.status || 'draft',
@@ -235,13 +236,13 @@ const ScriptsOverview = () => {
               <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
                 {item.title}
               </Text>
-              {item.analysis && (
+              {item.analysis && item.analysis.characters && item.analysis.scenes && (
                 <View style={styles.statsContainer}>
                   <Text variant="bodySmall" style={styles.statsText}>
-                    {item.analysis.characters.length} Characters · {item.analysis.scenes.length} Scenes
+                    {item.analysis.characters.length || 0} Characters · {item.analysis.scenes.length || 0} Scenes
                   </Text>
                   <Text variant="bodySmall" style={styles.statsText}>
-                    Duration: {Math.round(item.analysis.metadata.estimatedDuration)}min
+                    Duration: {Math.round(item.analysis.metadata?.estimatedDuration || 0)}min
                   </Text>
                 </View>
               )}

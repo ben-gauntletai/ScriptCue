@@ -759,7 +759,8 @@ const PracticeScript: React.FC = () => {
       
       // Reset rehearsal state
       currentIndexRef.current = null;
-      await stopListening();
+      
+      // Don't stop voice recognition if it's already running
       if (soundRef.current) {
         soundRef.current.stop();
         soundRef.current.release();
@@ -1117,7 +1118,13 @@ const PracticeScript: React.FC = () => {
       if (voiceInitialized.current) return;
       
       try {
-        Sound.setCategory('Playback');
+        // Initialize Sound with proper settings for voice recognition
+        if (Platform.OS === 'android') {
+          await Sound.setCategory('PlayAndRecord');
+          await Sound.setMode('VideoRecording');
+        } else {
+          Sound.setCategory('PlayAndRecord');
+        }
         
         const available = await Voice.isAvailable();
         if (!available) {
@@ -1128,6 +1135,8 @@ const PracticeScript: React.FC = () => {
           if (!isMounted) return;
           console.log('Speech started');
           setIsListening(true);
+          // Reset retry count when speech starts
+          setRetryCount(0);
         };
 
         Voice.onSpeechEnd = () => {
@@ -1141,6 +1150,12 @@ const PracticeScript: React.FC = () => {
           console.log('Final results:', result.value);
           
           try {
+            // Clear timeout if we got results
+            if (recognitionTimeout) {
+              clearTimeout(recognitionTimeout);
+              setRecognitionTimeout(null);
+            }
+            
             // First stop listening
             await stopListening();
             
@@ -1158,7 +1173,7 @@ const PracticeScript: React.FC = () => {
           }
         };
 
-        Voice.onSpeechError = async (error: { error: string }) => {
+        Voice.onSpeechError = async (error: any) => {
           if (!isMounted) return;
           console.log('Speech recognition error:', error);
 
@@ -1175,16 +1190,52 @@ const PracticeScript: React.FC = () => {
               return;
             }
 
-            // Handle retries
-            if (retryCount < MAX_RETRIES) {
-              console.log('Retrying recognition...');
-              setRetryCount(prev => prev + 1);
-              await new Promise(resolve => setTimeout(resolve, 500));
-              await startListening();
-            } else {
-              console.log('Max retries reached, moving to next line');
-              resetSpeechState();
-              await playNextLine();
+            // Extract error code safely
+            const errorCode = error?.error?.code || 
+                            (typeof error?.error === 'string' ? error.error.split('/')[0] : null) ||
+                            'unknown';
+
+            console.log('Handling error code:', errorCode);
+
+            switch (errorCode) {
+              case '7': // No match
+              case '6': // No speech input
+                if (retryCount < MAX_RETRIES) {
+                  console.log('No speech detected, retrying...');
+                  setRetryCount(prev => prev + 1);
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  await startListening();
+                } else {
+                  console.log('Max retries reached, moving to next line');
+                  resetSpeechState();
+                  await playNextLine();
+                }
+                break;
+              
+              case '5': // Client side error
+                console.log('Client error, reinitializing...');
+                try {
+                  await Voice.destroy();
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                  await Voice.start('en-US');
+                } catch (reinitError) {
+                  console.error('Error reinitializing Voice:', reinitError);
+                  resetSpeechState();
+                  await playNextLine();
+                }
+                break;
+              
+              default:
+                console.log('Unknown error, retrying...');
+                if (retryCount < MAX_RETRIES) {
+                  setRetryCount(prev => prev + 1);
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  await startListening();
+                } else {
+                  console.log('Max retries reached, moving to next line');
+                  resetSpeechState();
+                  await playNextLine();
+                }
             }
           } catch (error) {
             console.error('Error handling speech error:', error);
@@ -1208,6 +1259,9 @@ const PracticeScript: React.FC = () => {
     
     return () => {
       isMounted = false;
+      if (recognitionTimeout) {
+        clearTimeout(recognitionTimeout);
+      }
       if (soundRef.current) {
         soundRef.current.release();
       }
@@ -1230,9 +1284,50 @@ const PracticeScript: React.FC = () => {
       // Reset state before starting
       resetSpeechState();
       
+      // Android-specific optimization
+      if (Platform.OS === 'android') {
+        try {
+          // Release any existing Sound instances
+          if (soundRef.current) {
+            soundRef.current.stop();
+            soundRef.current.release();
+            soundRef.current = null;
+          }
+
+          // Set audio mode for voice recognition
+          await Sound.setCategory('PlayAndRecord');
+          await Sound.setMode('VideoRecording');
+          await Sound.setActive(true);
+          
+          // Small delay to ensure audio system is ready
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.error('Error setting up audio:', error);
+        }
+      }
+      
       // Start recognition
       await Voice.start('en-US');
+      
       setIsListening(true);
+      currentRecognitionStart.current = Date.now();
+
+      // Set a timeout to prevent infinite waiting
+      if (recognitionTimeout) {
+        clearTimeout(recognitionTimeout);
+      }
+      setRecognitionTimeout(
+        setTimeout(() => {
+          console.log('Recognition timeout, moving to next line');
+          if (isListening && !intentionalStopRef.current) {
+            stopListening().then(() => {
+              if (ensureRehearsalState()) {
+                playNextLine();
+              }
+            });
+          }
+        }, RECOGNITION_TIMEOUT)
+      );
     } catch (error) {
       console.error('Error starting voice recognition:', error);
       // On error, reset state and try to continue
@@ -1248,6 +1343,12 @@ const PracticeScript: React.FC = () => {
     try {
       console.log('Stopping listening...');
       
+      // Clear any existing timeout
+      if (recognitionTimeout) {
+        clearTimeout(recognitionTimeout);
+        setRecognitionTimeout(null);
+      }
+      
       // Set flag before stopping to prevent error handling
       intentionalStopRef.current = true;
       
@@ -1256,6 +1357,15 @@ const PracticeScript: React.FC = () => {
       
       // Small delay to ensure stop completes
       await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Reset audio settings on Android
+      if (Platform.OS === 'android') {
+        try {
+          await Sound.setActive(false);
+        } catch (error) {
+          console.error('Error resetting audio:', error);
+        }
+      }
     } catch (error) {
       console.error('Error stopping voice recognition:', error);
     } finally {
@@ -1392,7 +1502,7 @@ const PracticeScript: React.FC = () => {
           device={device}
           isActive={true}
           video={true}
-          audio={true}
+          audio={false}
           format={cameraFormat || undefined}
           fps={30}
           enableZoomGesture={true}

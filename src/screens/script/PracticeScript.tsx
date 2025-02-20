@@ -336,6 +336,7 @@ const PracticeScript: React.FC = () => {
   const [hasMoreLines, setHasMoreLines] = useState(true);
   const [allLines, setAllLines] = useState<ProcessedLine[]>([]);
   const scriptRef = useRef<Script | null>(null);
+  const [isCombinedMode, setIsCombinedMode] = useState(false);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<PracticeScriptRouteProp>();
@@ -696,22 +697,24 @@ const PracticeScript: React.FC = () => {
     }
   };
 
-  const handleStartRecording = async () => {
-    if (!camera.current) {
-      setError('Camera not initialized');
-      return;
-    }
-
-    if (!micPermission) {
-      setError('Microphone permission is required for recording');
-      return;
-    }
-
+  const startCombinedMode = async () => {
     try {
+      // Start recording first
+      if (!camera.current) {
+        setError('Camera not initialized');
+        return;
+      }
+
+      if (!micPermission) {
+        setError('Microphone permission is required for recording');
+        return;
+      }
+
       setIsVideoRecording(true);
       setIsRecording(true);
       setCameraError(null);
       
+      // Start the recording
       await camera.current.startRecording({
         flash: 'off',
         fileType: 'mp4',
@@ -731,10 +734,12 @@ const PracticeScript: React.FC = () => {
             );
             
             setIsUploading(false);
+            setIsCombinedMode(false);
           } catch (error) {
             console.error('Error saving video:', error);
             setError('Failed to save video. Please try again.');
             setIsUploading(false);
+            setIsCombinedMode(false);
           }
         },
         onRecordingError: (error: CameraCaptureError) => {
@@ -742,14 +747,315 @@ const PracticeScript: React.FC = () => {
           setCameraError(`Recording failed: ${error.message}`);
           setIsVideoRecording(false);
           setIsRecording(false);
+          setIsCombinedMode(false);
         },
       });
-    } catch (e) {
-      console.error('Error starting recording:', e);
-      setError('Failed to start recording. Please try again.');
-      setIsVideoRecording(false);
-      setIsRecording(false);
+
+      // Set combined mode state
+      setIsCombinedMode(true);
+
+      // Start rehearsal flow
+      console.log('Starting rehearsal in combined mode');
+      
+      // Reset rehearsal state
+      currentIndexRef.current = null;
+      await stopListening();
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      // Ensure clean state
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Set rehearsal state
+      isRehearsingRef.current = true;
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
+      setCurrentlyPlayingLine(null);
+      setIsRehearsing(true);
+      
+      // Begin with first line
+      await playNextLine();
+    } catch (error) {
+      console.error('Error starting combined mode:', error);
+      // Clean up if either recording or rehearsal fails
+      if (isVideoRecording) {
+        await handleStopRecording();
+      }
+      if (isRehearsingRef.current) {
+        await handleStopRehearsal();
+      }
+      setError('Failed to start recording and rehearsal. Please try again.');
     }
+  };
+
+  const handleStartRecording = async () => {
+    if (showCamera) {
+      await startCombinedMode();
+    } else {
+      setError('Camera is not enabled');
+    }
+  };
+
+  const handleStartRehearsal = async () => {
+    console.log('Starting rehearsal', {
+      availableVoices: Object.keys(characterVoicesRef.current),
+      dialogueLength: dialogueRef.current.length,
+      isCombinedMode,
+      showCamera
+    });
+    
+    try {
+      if (showCamera) {
+        // If camera is shown, start combined mode
+        await startCombinedMode();
+        return;
+      }
+
+      // Regular rehearsal flow
+      currentIndexRef.current = null;
+      
+      await stopListening();
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      isRehearsingRef.current = true;
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
+      setCurrentlyPlayingLine(null);
+      setIsRehearsing(true);
+      
+      await playNextLine();
+    } catch (error) {
+      console.error('Error starting rehearsal:', error);
+      handleStopRehearsal();
+      setError('Failed to start rehearsal. Please try again.');
+    }
+  };
+
+  const handleStopRehearsal = async () => {
+    console.log('Stopping rehearsal');
+    
+    isRehearsingRef.current = false;
+    
+    try {
+      if (isCombinedMode) {
+        // In combined mode, stop recording first
+        await handleStopRecording();
+      }
+      
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      await stopListening();
+      
+      resetSpeechState();
+      currentIndexRef.current = null;
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
+      setCurrentlyPlayingLine(null);
+      setIsRehearsing(false);
+      setIsCombinedMode(false);
+    } catch (error) {
+      console.error('Error stopping rehearsal:', error);
+      setIsRehearsing(false);
+      resetSpeechState();
+      setIsCombinedMode(false);
+    }
+  };
+
+  const toggleCamera = () => {
+    setShowCamera(!showCamera);
+    if (isRecording) {
+      handleStopRecording();
+    }
+  };
+
+  // Simple scroll to line function
+  const scrollToLine = (index: number) => {
+    if (scrollViewRef.current && dialogueRef.current[index]) {
+      scrollViewRef.current.scrollTo({
+        y: index * 100,
+        animated: true
+      });
+    }
+  };
+
+  // Update getVoiceLineUrl to use the ref
+  const getVoiceLineUrl = (characterName: string, lineNumber: number, voiceId: VoiceOption): string | null => {
+    console.log('Getting voice URL for:', {
+      characterName,
+      lineNumber,
+      voiceId,
+      isPracticingCharacter: characterName === characterId
+    });
+
+    // Log the entire processedLines array for debugging
+    console.log('All processed lines:', {
+      count: processedLinesRef.current.length,
+      lines: processedLinesRef.current.map(pl => ({
+        characterName: pl.characterName,
+        lineNumber: pl.originalLineNumber,
+        hasVoices: !!pl.voices,
+        text: pl.text
+      }))
+    });
+
+    if (characterName === characterId) {
+      console.log('Skipping voice URL for practicing character');
+      return null;
+    }
+
+    // Try to find the processed line using the ref
+    const processedLine = processedLinesRef.current.find(
+      pl => {
+        const match = pl.characterName === characterName && pl.originalLineNumber === lineNumber;
+        console.log('Checking line:', {
+          checking: {
+            characterName: pl.characterName,
+            lineNumber: pl.originalLineNumber
+          },
+          looking_for: {
+            characterName,
+            lineNumber
+          },
+          isMatch: match
+        });
+        return match;
+      }
+    );
+
+    console.log('Found processed line:', {
+      found: !!processedLine,
+      characterName: processedLine?.characterName,
+      lineNumber: processedLine?.originalLineNumber,
+      hasVoices: !!processedLine?.voices,
+      availableVoices: processedLine?.voices ? Object.keys(processedLine.voices) : [],
+      text: processedLine?.text
+    });
+
+    const voiceUrl = processedLine?.voices?.[voiceId];
+    console.log('Voice URL result:', {
+      hasUrl: !!voiceUrl,
+      voiceId,
+      url: voiceUrl
+    });
+
+    return voiceUrl || null;
+  };
+
+  // Simple play voice line function
+  const playVoiceLine = async (lineId: string, voiceUrl: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Clean up previous sound
+        if (soundRef.current) {
+          soundRef.current.stop();
+          soundRef.current.release();
+          soundRef.current = null;
+        }
+
+        const newSound = new Sound(voiceUrl, '', (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          newSound.play((success) => {
+            if (success) {
+              resolve();
+            } else {
+              reject(new Error('Playback failed'));
+            }
+            
+            // Cleanup
+            newSound.release();
+            soundRef.current = null;
+          });
+          
+          soundRef.current = newSound;
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
+
+  // Add loadMoreLines function
+  const loadMoreLines = async () => {
+    if (!hasMoreLines || isLoadingMore || !scriptRef.current?.analysis?.processedLines) return;
+
+    try {
+      setIsLoadingMore(true);
+      const startIndex = currentPage * LINES_PER_PAGE;
+      const nextLines = scriptRef.current.analysis.processedLines.slice(
+        startIndex,
+        startIndex + LINES_PER_PAGE
+      );
+
+      if (nextLines.length > 0) {
+        setAllLines(prev => [...prev, ...nextLines]);
+        setCurrentPage(prev => prev + 1);
+        setHasMoreLines(
+          startIndex + LINES_PER_PAGE < scriptRef.current.analysis.processedLines.length
+        );
+
+        // Process new lines and update dialogue
+        const updatedDialogue = initializeDialogue([...allLines, ...nextLines]);
+        setDialogue(updatedDialogue);
+        dialogueRef.current = updatedDialogue;
+      } else {
+        setHasMoreLines(false);
+      }
+    } catch (error) {
+      console.error('Error loading more lines:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // Add scroll handler to FlatList
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 20;
+    const isCloseToBottom = 
+      layoutMeasurement.height + contentOffset.y >= 
+      contentSize.height - paddingToBottom;
+
+    if (isCloseToBottom && !isLoadingMore && hasMoreLines) {
+      loadMoreLines();
+    }
+  };
+
+  // Add initializeDialogue function
+  const initializeDialogue = (lines: ProcessedLine[] = allLines) => {
+    if (!scriptRef.current?.analysis) return [];
+
+    const combinedLines: DialogueItem[] = lines.map(line => ({
+      characterId: line.isAction ? 'action' : line.characterName,
+      characterName: line.isAction ? 'action' : line.characterName,
+      text: line.text,
+      lineNumber: line.originalLineNumber,
+      isUser: line.characterName === characterId,
+      isAction: line.isAction,
+      voices: line.voices
+    }));
+
+    // Sort by line number
+    return combinedLines.sort((a, b) => a.lineNumber - b.lineNumber);
   };
 
   const handleStopRecording = async () => {
@@ -762,11 +1068,13 @@ const PracticeScript: React.FC = () => {
       await camera.current.stopRecording();
       setIsVideoRecording(false);
       setIsRecording(false);
+      setIsCombinedMode(false);
     } catch (e) {
       console.error('Error stopping recording:', e);
       setError('Failed to stop recording. Please try again.');
       setIsVideoRecording(false);
       setIsRecording(false);
+      setIsCombinedMode(false);
     }
   };
 
@@ -1055,257 +1363,6 @@ const PracticeScript: React.FC = () => {
     }
   };
 
-  const handleStartRehearsal = async () => {
-    console.log('Starting rehearsal', {
-      availableVoices: Object.keys(characterVoicesRef.current),
-      dialogueLength: dialogueRef.current.length
-    });
-    
-    try {
-      // Reset all state first
-      currentIndexRef.current = null;
-      
-      // Stop any ongoing processes
-      await stopListening();
-      if (soundRef.current) {
-        soundRef.current.stop();
-        soundRef.current.release();
-        soundRef.current = null;
-      }
-      
-      // Ensure clean state
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Set rehearsal state
-      isRehearsingRef.current = true;
-      setCurrentPlayingIndex(null);
-      setCurrentLineIndex(0);
-      setIsLineInProgress(false);
-      setCurrentlyPlayingLine(null);
-      setIsRehearsing(true);
-      
-      // Begin with first line
-      await playNextLine();
-    } catch (error) {
-      console.error('Error starting rehearsal:', error);
-      handleStopRehearsal();
-      setError('Failed to start rehearsal. Please try again.');
-    }
-  };
-
-  const handleStopRehearsal = async () => {
-    console.log('Stopping rehearsal');
-    
-    // Set rehearsal flag first to prevent new operations
-    isRehearsingRef.current = false;
-    
-    try {
-      // Stop all ongoing processes
-      if (soundRef.current) {
-        soundRef.current.stop();
-        soundRef.current.release();
-        soundRef.current = null;
-      }
-      
-      await stopListening();
-      
-      // Reset all state
-      resetSpeechState();
-      currentIndexRef.current = null;
-      setCurrentPlayingIndex(null);
-      setCurrentLineIndex(0);
-      setIsLineInProgress(false);
-      setCurrentlyPlayingLine(null);
-      setIsRehearsing(false);
-    } catch (error) {
-      console.error('Error stopping rehearsal:', error);
-      // Force reset state even if error occurs
-      setIsRehearsing(false);
-      resetSpeechState();
-    }
-  };
-
-  const toggleCamera = () => {
-    setShowCamera(!showCamera);
-    if (isRecording) {
-      handleStopRecording();
-    }
-  };
-
-  // Simple scroll to line function
-  const scrollToLine = (index: number) => {
-    if (scrollViewRef.current && dialogueRef.current[index]) {
-      scrollViewRef.current.scrollTo({
-        y: index * 100,
-        animated: true
-      });
-    }
-  };
-
-  // Update getVoiceLineUrl to use the ref
-  const getVoiceLineUrl = (characterName: string, lineNumber: number, voiceId: VoiceOption): string | null => {
-    console.log('Getting voice URL for:', {
-      characterName,
-      lineNumber,
-      voiceId,
-      isPracticingCharacter: characterName === characterId
-    });
-
-    // Log the entire processedLines array for debugging
-    console.log('All processed lines:', {
-      count: processedLinesRef.current.length,
-      lines: processedLinesRef.current.map(pl => ({
-        characterName: pl.characterName,
-        lineNumber: pl.originalLineNumber,
-        hasVoices: !!pl.voices,
-        text: pl.text
-      }))
-    });
-
-    if (characterName === characterId) {
-      console.log('Skipping voice URL for practicing character');
-      return null;
-    }
-
-    // Try to find the processed line using the ref
-    const processedLine = processedLinesRef.current.find(
-      pl => {
-        const match = pl.characterName === characterName && pl.originalLineNumber === lineNumber;
-        console.log('Checking line:', {
-          checking: {
-            characterName: pl.characterName,
-            lineNumber: pl.originalLineNumber
-          },
-          looking_for: {
-            characterName,
-            lineNumber
-          },
-          isMatch: match
-        });
-        return match;
-      }
-    );
-
-    console.log('Found processed line:', {
-      found: !!processedLine,
-      characterName: processedLine?.characterName,
-      lineNumber: processedLine?.originalLineNumber,
-      hasVoices: !!processedLine?.voices,
-      availableVoices: processedLine?.voices ? Object.keys(processedLine.voices) : [],
-      text: processedLine?.text
-    });
-
-    const voiceUrl = processedLine?.voices?.[voiceId];
-    console.log('Voice URL result:', {
-      hasUrl: !!voiceUrl,
-      voiceId,
-      url: voiceUrl
-    });
-
-    return voiceUrl || null;
-  };
-
-  // Simple play voice line function
-  const playVoiceLine = async (lineId: string, voiceUrl: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      try {
-        // Clean up previous sound
-        if (soundRef.current) {
-          soundRef.current.stop();
-          soundRef.current.release();
-          soundRef.current = null;
-        }
-
-        const newSound = new Sound(voiceUrl, '', (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          newSound.play((success) => {
-            if (success) {
-              resolve();
-            } else {
-              reject(new Error('Playback failed'));
-            }
-            
-            // Cleanup
-            newSound.release();
-            soundRef.current = null;
-          });
-          
-          soundRef.current = newSound;
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
-  };
-
-  // Add loadMoreLines function
-  const loadMoreLines = async () => {
-    if (!hasMoreLines || isLoadingMore || !scriptRef.current?.analysis?.processedLines) return;
-
-    try {
-      setIsLoadingMore(true);
-      const startIndex = currentPage * LINES_PER_PAGE;
-      const nextLines = scriptRef.current.analysis.processedLines.slice(
-        startIndex,
-        startIndex + LINES_PER_PAGE
-      );
-
-      if (nextLines.length > 0) {
-        setAllLines(prev => [...prev, ...nextLines]);
-        setCurrentPage(prev => prev + 1);
-        setHasMoreLines(
-          startIndex + LINES_PER_PAGE < scriptRef.current.analysis.processedLines.length
-        );
-
-        // Process new lines and update dialogue
-        const updatedDialogue = initializeDialogue([...allLines, ...nextLines]);
-        setDialogue(updatedDialogue);
-        dialogueRef.current = updatedDialogue;
-      } else {
-        setHasMoreLines(false);
-      }
-    } catch (error) {
-      console.error('Error loading more lines:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
-
-  // Add scroll handler to FlatList
-  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const paddingToBottom = 20;
-    const isCloseToBottom = 
-      layoutMeasurement.height + contentOffset.y >= 
-      contentSize.height - paddingToBottom;
-
-    if (isCloseToBottom && !isLoadingMore && hasMoreLines) {
-      loadMoreLines();
-    }
-  };
-
-  // Add initializeDialogue function
-  const initializeDialogue = (lines: ProcessedLine[] = allLines) => {
-    if (!scriptRef.current?.analysis) return [];
-
-    const combinedLines: DialogueItem[] = lines.map(line => ({
-      characterId: line.isAction ? 'action' : line.characterName,
-      characterName: line.isAction ? 'action' : line.characterName,
-      text: line.text,
-      lineNumber: line.originalLineNumber,
-      isUser: line.characterName === characterId,
-      isAction: line.isAction,
-      voices: line.voices
-    }));
-
-    // Sort by line number
-    return combinedLines.sort((a, b) => a.lineNumber - b.lineNumber);
-  };
-
   if (!script || !currentCharacter) {
     return (
       <View style={[styles.container, styles.loadingContainer]}>
@@ -1383,7 +1440,7 @@ const PracticeScript: React.FC = () => {
           mode="contained"
           onPress={toggleCamera}
           icon="camera"
-          disabled={isUploading || !!cameraError || isRehearsing}
+          disabled={isUploading || !!cameraError || isRehearsing || isCombinedMode}
         >
           Toggle
         </Button>
@@ -1392,16 +1449,16 @@ const PracticeScript: React.FC = () => {
             icon="camera-flip"
             size={24}
             onPress={toggleCameraPosition}
-            disabled={isRecording || isUploading || isRehearsing}
+            disabled={isRecording || isUploading || isRehearsing || isCombinedMode}
           />
         )}
         <Button
           mode="contained"
-          onPress={isRehearsing ? handleStopRehearsal : handleStartRehearsal}
-          icon={isRehearsing ? "stop" : "play"}
+          onPress={isRehearsing || isCombinedMode ? handleStopRehearsal : handleStartRehearsal}
+          icon={isRehearsing || isCombinedMode ? "stop" : showCamera ? "video" : "play"}
           disabled={isUploading || !!cameraError}
         >
-          {isRehearsing ? "Stop" : "Rehearse"}
+          {isRehearsing || isCombinedMode ? "Stop" : showCamera ? "Record" : "Rehearse"}
         </Button>
       </View>
       <ScrollView 

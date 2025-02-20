@@ -100,7 +100,7 @@ interface VoiceInfo {
 }
 
 const VOICE_INFO: Record<VoiceOption, VoiceInfo> = {
-  alloy: { description: 'Warm, steady', gender: 'Male' },
+  alloy: { description: 'Warm, steady', gender: 'Female' },
   ash: { description: 'Deep, authoritative', gender: 'Male' },
   coral: { description: 'Bright, expressive', gender: 'Female' },
   echo: { description: 'Smooth, refined', gender: 'Male' },
@@ -830,13 +830,12 @@ async function assignVoicesToCharacters(
     messages: [
       {
         role: "system",
-        content: "You are a script analysis expert. Your task is to predict the gender (Male/Female) of character names. Respond with a JSON object where keys are character names and values are 'Male' or 'Female'. Base your prediction on common naming conventions and character context if provided. IMPORTANT: Respond with ONLY the JSON object, no markdown formatting or additional text."
+        content: "You are a script analysis expert. Your task is to predict the gender (Male/Female) of character names. Respond with a JSON object where keys are character names and values are 'Male' or 'Female'. Base your prediction on common naming conventions. IMPORTANT: Respond with ONLY the JSON object, no markdown formatting or additional text."
       },
       {
         role: "user",
         content: JSON.stringify(characters.map(char => ({
-          name: char.name,
-          firstLine: char.dialogue[0]?.text || ''
+          name: char.name
         })))
       }
     ],

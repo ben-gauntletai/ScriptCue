@@ -615,13 +615,60 @@ const PracticeScript: React.FC = () => {
     setSettingsVisible(true);
   };
 
-  const handleCharacterChange = (newCharacterId: string) => {
-    // Navigate to the same screen with the new character
-    navigation.replace('PracticeScript', {
-      scriptId,
-      characterId: newCharacterId,
-    });
-    setSettingsVisible(false);
+  const handleCharacterChange = async (newCharacterId: string) => {
+    try {
+      // First stop any ongoing processes
+      if (isRehearsingRef.current) {
+        await handleStopRehearsal();
+      }
+      
+      // Stop any ongoing voice recognition and destroy instance
+      await stopListening();
+      await Voice.destroy();
+      
+      // Stop any playing audio
+      if (soundRef.current) {
+        soundRef.current.stop();
+        soundRef.current.release();
+        soundRef.current = null;
+      }
+      
+      // Reset all state
+      setCurrentPlayingIndex(null);
+      setCurrentLineIndex(0);
+      setIsLineInProgress(false);
+      setCurrentlyPlayingLine(null);
+      setIsRehearsing(false);
+      setIsListening(false);
+      setRetryCount(0);
+      setPartialResults([]);
+      setDialogue([]);
+      setAllLines([]);
+      setCurrentPage(1);
+      setHasMoreLines(true);
+      setIsLoadingMore(false);
+      
+      // Reset all refs
+      dialogueRef.current = [];
+      currentIndexRef.current = null;
+      intentionalStopRef.current = false;
+      processedLinesRef.current = [];
+      scriptRef.current = null;
+      voiceInitialized.current = false; // Reset voice initialization flag
+      
+      // Close settings dialog
+      setSettingsVisible(false);
+
+      // Navigate to the same screen with the new character
+      // This will trigger a fresh load of the script with the new character
+      navigation.replace('PracticeScript', {
+        scriptId,
+        characterId: newCharacterId,
+      });
+    } catch (error) {
+      console.error('Error switching characters:', error);
+      setError('Failed to switch characters. Please try again.');
+    }
   };
 
   const saveVideoLocally = async (sourcePath: string) => {

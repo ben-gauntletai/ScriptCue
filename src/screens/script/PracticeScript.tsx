@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Platform, PermissionsAndroid, Alert, AppState } from 'react-native';
+import { View, StyleSheet, ScrollView, Platform, PermissionsAndroid, Alert, AppState, NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import { Text, IconButton, useTheme, Button, Portal, Dialog, MD3Theme, RadioButton, ActivityIndicator, TextInput } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { MainNavigationProp, MainStackParamList } from '../../navigation/types';
@@ -31,6 +31,7 @@ interface DialogueItem {
   isMultiLine?: boolean;
   continuationOf?: number;
   isAction?: boolean;
+  voices?: Record<string, string>;
 }
 
 type VoiceInfo = {
@@ -62,6 +63,16 @@ interface Character {
   lines: number;
   firstAppearance: number;
   dialogue?: DialogueLine[];
+}
+
+// Add ProcessedLine type
+interface ProcessedLine {
+  characterName: string;
+  text: string;
+  originalLineNumber: number;
+  sequentialNumber: number;
+  isAction?: boolean;
+  voices?: Record<string, string>;
 }
 
 const createStyles = (theme: MD3Theme) => StyleSheet.create({
@@ -262,6 +273,8 @@ const createStyles = (theme: MD3Theme) => StyleSheet.create({
   },
 });
 
+const LINES_PER_PAGE = 20;
+
 const PracticeScript: React.FC = () => {
   const [script, setScript] = useState<Script | null>(null);
   const [currentCharacter, setCurrentCharacter] = useState<ScriptCharacter | null>(null);
@@ -318,6 +331,11 @@ const PracticeScript: React.FC = () => {
   const lastSilenceTime = useRef<number | null>(null);
   const SILENCE_DEBOUNCE = 1000; // Minimum time between silence detections
   const processedLinesRef = useRef<any[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMoreLines, setHasMoreLines] = useState(true);
+  const [allLines, setAllLines] = useState<ProcessedLine[]>([]);
+  const scriptRef = useRef<Script | null>(null);
 
   const navigation = useNavigation<MainNavigationProp>();
   const route = useRoute<PracticeScriptRouteProp>();
@@ -343,7 +361,12 @@ const PracticeScript: React.FC = () => {
   useEffect(() => {
     const loadScript = async () => {
       try {
-        const scriptData = await firebaseService.getScript(scriptId);
+        // Load script and voice settings in parallel
+        const [scriptData, savedVoices] = await Promise.all([
+          firebaseService.getScript(scriptId),
+          firebaseService.getCharacterVoices(scriptId)
+        ]);
+
         if (scriptData && scriptData.analysis) {
           console.log('Loaded script analysis:', {
             hasProcessedLines: !!scriptData.analysis.processedLines,
@@ -352,7 +375,7 @@ const PracticeScript: React.FC = () => {
             characters: scriptData.analysis.characters?.map(c => c.name)
           });
           
-          // Store processed lines in ref
+          // Store processed lines in ref immediately
           processedLinesRef.current = scriptData.analysis.processedLines || [];
           
           setScript(scriptData);
@@ -368,58 +391,47 @@ const PracticeScript: React.FC = () => {
               gender: 'unknown'
             });
 
-            // Load saved voice settings if they exist
-            const savedVoices = await firebaseService.getCharacterVoices(scriptId);
+            // Set initial lines for pagination and initialize dialogue
+            const initialLines = scriptData.analysis.processedLines.slice(0, LINES_PER_PAGE);
+            setAllLines(initialLines);
+            setHasMoreLines(scriptData.analysis.processedLines.length > LINES_PER_PAGE);
+            
+            // Store full script data for later use
+            scriptRef.current = scriptData;
+
+            // Initialize dialogue with initial lines
+            const initialDialogue = initializeDialogue(initialLines);
+            setDialogue(initialDialogue);
+            dialogueRef.current = initialDialogue;
+
             if (savedVoices) {
               console.log('Loaded voice settings:', savedVoices);
               const typedVoices = savedVoices as Record<string, VoiceSettings>;
               setCharacterVoices(typedVoices);
               characterVoicesRef.current = typedVoices;
 
-              // Check if we need to generate voice lines
-              const existingVoiceLines = await firebaseService.getVoiceLines(scriptId);
-              
-              // First check which characters actually need voice generation
-              let needsGeneration = false;
-              let hasValidCharacters = false;
-              let charactersNeedingGeneration: string[] = [];
+              // Pre-process all lines that need voice generation
+              const linesToGenerate = processedLinesRef.current
+                .filter(pl => {
+                  // Skip practicing character and action lines
+                  if (pl.characterName === characterId || pl.isAction) return false;
+                  
+                  // Check if this character has voice settings
+                  const charVoice = savedVoices[pl.characterName]?.voice;
+                  if (!charVoice) return false;
 
-              // Check each character with voice settings
-              for (const charName of Object.keys(savedVoices)) {
-                // Skip practicing character
-                if (charName === characterId) continue;
-
-                // Find all processed lines for this character
-                const characterLines = scriptData?.analysis?.processedLines?.filter(
-                  pl => pl.characterName === charName && !pl.isAction
-                );
-
-                if (!characterLines?.length || !savedVoices[charName]?.voice) {
-                  console.log(`Skipping character ${charName}: no dialogue or voice settings`);
-                  continue;
-                }
-
-                hasValidCharacters = true;
-
-                // Check if any line needs voice generation
-                for (const line of characterLines) {
-                  const currentVoice = savedVoices[charName].voice;
-                  if (!line.voices || !line.voices[currentVoice]) {
-                    console.log(`Found missing voice line for ${charName}, line ${line.originalLineNumber}`, {
-                      reason: !line.voices 
-                        ? 'No voices object'
-                        : 'Voice file with current voice not found'
-                    });
-                    charactersNeedingGeneration.push(charName);
-                    needsGeneration = true;
-                    break;
+                  // Check if this line needs voice generation
+                  return !pl.voices || !pl.voices[charVoice];
+                })
+                .reduce((acc, pl) => {
+                  if (!acc.includes(pl.characterName)) {
+                    acc.push(pl.characterName);
                   }
-                }
-              }
+                  return acc;
+                }, [] as string[]);
 
-              // Only proceed if we actually found characters needing generation
-              if (charactersNeedingGeneration.length > 0 && hasValidCharacters && needsGeneration) {
-                console.log('Starting voice generation for characters:', charactersNeedingGeneration);
+              if (linesToGenerate.length > 0) {
+                console.log('Starting voice generation for characters:', linesToGenerate);
                 try {
                   setIsGeneratingVoices(true);
                   setGenerationProgress('Generating Voices...');
@@ -428,6 +440,58 @@ const PracticeScript: React.FC = () => {
                     characterId,
                     savedVoices
                   );
+
+                  // Refresh processed lines after generation
+                  const updatedScript = await firebaseService.getScript(scriptId);
+                  if (updatedScript?.analysis?.processedLines) {
+                    processedLinesRef.current = updatedScript.analysis.processedLines;
+                    
+                    // Update dialogue state with new voice URLs
+                    setDialogue(prevDialogue => {
+                      return prevDialogue.map(dialogueItem => {
+                        // Skip action lines and practicing character's lines
+                        if (dialogueItem.isAction || dialogueItem.characterName === characterId) {
+                          return dialogueItem;
+                        }
+
+                        // Find corresponding processed line to get updated voice URLs
+                        const processedLine = updatedScript?.analysis?.processedLines?.find(
+                          pl => pl.characterName === dialogueItem.characterName && 
+                               pl.originalLineNumber === dialogueItem.lineNumber
+                        );
+
+                        if (processedLine?.voices) {
+                          return {
+                            ...dialogueItem,
+                            voices: processedLine.voices
+                          };
+                        }
+
+                        return dialogueItem;
+                      });
+                    });
+
+                    // Also update dialogueRef to maintain consistency
+                    dialogueRef.current = dialogueRef.current.map(dialogueItem => {
+                      if (dialogueItem.isAction || dialogueItem.characterName === characterId) {
+                        return dialogueItem;
+                      }
+
+                      const processedLine = updatedScript?.analysis?.processedLines?.find(
+                        pl => pl.characterName === dialogueItem.characterName && 
+                             pl.originalLineNumber === dialogueItem.lineNumber
+                      );
+
+                      if (processedLine?.voices) {
+                        return {
+                          ...dialogueItem,
+                          voices: processedLine.voices
+                        };
+                      }
+
+                      return dialogueItem;
+                    });
+                  }
                 } catch (error) {
                   console.error('Error generating voice lines:', error);
                   setError('Failed to generate voice lines. Some characters may not have audio.');
@@ -435,52 +499,9 @@ const PracticeScript: React.FC = () => {
                   setIsGeneratingVoices(false);
                 }
               } else {
-                console.log('No voice generation needed:', {
-                  charactersChecked: Object.keys(savedVoices).length,
-                  charactersNeedingGeneration: charactersNeedingGeneration.length,
-                  hasValidCharacters,
-                  needsGeneration
-                });
+                console.log('No voice generation needed');
               }
             }
-
-            // Organize dialogue and action lines in sequential order
-            const allLines: DialogueItem[] = [];
-            
-            // Add action lines
-            if (scriptData.analysis.actionLines) {
-              scriptData.analysis.actionLines.forEach((action) => {
-                allLines.push({
-                  characterId: 'ACTION',
-                  characterName: 'ACTION',
-                  text: action.text,
-                  lineNumber: action.lineNumber,
-                  isUser: false,
-                  isAction: true,
-                });
-              });
-            }
-
-            // Add dialogue lines
-            scriptData.analysis.characters.forEach((char) => {
-              if (char.dialogue && char.dialogue.length > 0) {
-                char.dialogue.forEach((line) => {
-                  allLines.push({
-                    characterId: char.name,
-                    characterName: char.name,
-                    text: line.text,
-                    lineNumber: line.lineNumber,
-                    isUser: char.name === characterId,
-                    isMultiLine: line.isMultiLine,
-                    continuationOf: line.continuationOf,
-                  });
-                });
-              }
-            });
-
-            // Sort all lines by line number
-            allLines.sort((a, b) => a.lineNumber - b.lineNumber);
-            setDialogue(allLines);
           } else {
             setError('Character not found in script');
           }
@@ -489,7 +510,7 @@ const PracticeScript: React.FC = () => {
         }
       } catch (error) {
         console.error('Error loading script:', error);
-        setError('Failed to load script. Please try again.');
+        setError(error instanceof Error ? error.message : 'Failed to load script');
       }
     };
 
@@ -1172,6 +1193,70 @@ const PracticeScript: React.FC = () => {
         reject(error);
       }
     });
+  };
+
+  // Add loadMoreLines function
+  const loadMoreLines = async () => {
+    if (!hasMoreLines || isLoadingMore || !scriptRef.current?.analysis?.processedLines) return;
+
+    try {
+      setIsLoadingMore(true);
+      const startIndex = currentPage * LINES_PER_PAGE;
+      const nextLines = scriptRef.current.analysis.processedLines.slice(
+        startIndex,
+        startIndex + LINES_PER_PAGE
+      );
+
+      if (nextLines.length > 0) {
+        setAllLines(prev => [...prev, ...nextLines]);
+        setCurrentPage(prev => prev + 1);
+        setHasMoreLines(
+          startIndex + LINES_PER_PAGE < scriptRef.current.analysis.processedLines.length
+        );
+
+        // Process new lines and update dialogue
+        const updatedDialogue = initializeDialogue([...allLines, ...nextLines]);
+        setDialogue(updatedDialogue);
+        dialogueRef.current = updatedDialogue;
+      } else {
+        setHasMoreLines(false);
+      }
+    } catch (error) {
+      console.error('Error loading more lines:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // Add scroll handler to FlatList
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 20;
+    const isCloseToBottom = 
+      layoutMeasurement.height + contentOffset.y >= 
+      contentSize.height - paddingToBottom;
+
+    if (isCloseToBottom && !isLoadingMore && hasMoreLines) {
+      loadMoreLines();
+    }
+  };
+
+  // Add initializeDialogue function
+  const initializeDialogue = (lines: ProcessedLine[] = allLines) => {
+    if (!scriptRef.current?.analysis) return [];
+
+    const combinedLines: DialogueItem[] = lines.map(line => ({
+      characterId: line.isAction ? 'action' : line.characterName,
+      characterName: line.isAction ? 'action' : line.characterName,
+      text: line.text,
+      lineNumber: line.originalLineNumber,
+      isUser: line.characterName === characterId,
+      isAction: line.isAction,
+      voices: line.voices
+    }));
+
+    // Sort by line number
+    return combinedLines.sort((a, b) => a.lineNumber - b.lineNumber);
   };
 
   if (!script || !currentCharacter) {

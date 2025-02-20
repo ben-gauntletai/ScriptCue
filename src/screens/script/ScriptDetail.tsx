@@ -28,7 +28,7 @@ interface VoiceSettings {
 const VOICE_OPTIONS: VoiceOption[] = ['alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer'];
 
 const VOICE_INFO: Record<VoiceOption, VoiceInfo> = {
-  alloy: { description: 'Warm, steady', gender: 'Male' },
+  alloy: { description: 'Warm, steady', gender: 'Female' },
   ash: { description: 'Deep, authoritative', gender: 'Male' },
   coral: { description: 'Bright, expressive', gender: 'Female' },
   echo: { description: 'Smooth, refined', gender: 'Male' },
@@ -433,8 +433,6 @@ const ScriptDetail: React.FC = () => {
     if (characterVoices[characterName]) {
       setSelectedVoice(characterVoices[characterName].voice as VoiceOption);
       setTestText(characterVoices[characterName].testText);
-    } else {
-      setSelectedVoice('alloy');
     }
     setVoiceSettingsVisible(true);
   };

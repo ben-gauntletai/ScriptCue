@@ -1548,27 +1548,11 @@ const PracticeScript: React.FC = () => {
       <View style={styles.controlsRow}>
         <Button
           mode="contained"
-          onPress={toggleCamera}
-          icon="camera"
-          disabled={isUploading || !!cameraError || isRehearsing || isCombinedMode}
-        >
-          Toggle
-        </Button>
-        {showCamera && (
-          <IconButton
-            icon="camera-flip"
-            size={24}
-            onPress={toggleCameraPosition}
-            disabled={isRecording || isUploading || isRehearsing || isCombinedMode}
-          />
-        )}
-        <Button
-          mode="contained"
           onPress={isRehearsing || isCombinedMode ? handleStopRehearsal : handleStartRehearsal}
-          icon={isRehearsing || isCombinedMode ? "stop" : showCamera ? "video" : "play"}
+          icon={isRehearsing || isCombinedMode ? "stop" : "play"}
           disabled={isUploading || !!cameraError}
         >
-          {isRehearsing || isCombinedMode ? "Stop" : showCamera ? "Record" : "Rehearse"}
+          {isRehearsing || isCombinedMode ? "Stop" : "Rehearse"}
         </Button>
       </View>
       <ScrollView 

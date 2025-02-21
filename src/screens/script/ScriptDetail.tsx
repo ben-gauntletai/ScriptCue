@@ -496,13 +496,6 @@ const ScriptDetail: React.FC = () => {
             >
               Practice
             </Button>
-            <Button
-              mode="outlined"
-              onPress={() => setRecordingsDialogVisible(true)}
-              icon="video"
-            >
-              Recordings
-            </Button>
           </View>
           <View style={styles.rightActions}>
             <IconButton
